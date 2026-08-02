@@ -184,3 +184,10 @@ body {
 }
 
 .pt-form-manuel { margin-top: 12px; }
+
+.pt-nuitee-boutons {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+  flex-wrap: wrap;
+}

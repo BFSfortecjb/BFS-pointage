@@ -20,6 +20,8 @@ const S = {
   ongletActif: 'pointage',
   horodatagesJour: [],
   activitesJour: [],
+  centres: [],
+  deplacementsRecents: [],
 };
 
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade
@@ -73,6 +75,17 @@ async function ptChargerParametres() {
 
 function ptParametreActif(cle) {
   return S.parametres[cle] === 'true';
+}
+
+async function ptChargerCentres() {
+  const { data, error } = await ptSupabase
+    .from('centres')
+    .select('code, libelle')
+    .eq('actif', true)
+    .order('libelle');
+  if (error) throw error;
+  S.centres = data;
+  return data;
 }
 
 // --- Utilitaires date/heure ------------------------------------------------
