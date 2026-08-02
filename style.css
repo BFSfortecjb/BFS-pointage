@@ -1,0 +1,186 @@
+/* =========================================================================
+   Pointage BFS — style.css
+   Charte graphique BFS : Montserrat, gris #464645, jaune #f3ab12,
+   rouge #b2181a, noir #080808.
+   ========================================================================= */
+
+:root {
+  --bfs-gris: #464645;
+  --bfs-jaune: #f3ab12;
+  --bfs-rouge: #b2181a;
+  --bfs-noir: #080808;
+  --bfs-blanc: #ffffff;
+  --bfs-gris-clair: #f2f2f2;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Montserrat', sans-serif;
+  background: var(--bfs-gris-clair);
+  color: var(--bfs-noir);
+}
+
+.pt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--bfs-noir);
+  color: var(--bfs-blanc);
+  padding: 12px 16px;
+}
+
+.pt-header-titre { font-weight: 700; font-size: 1.1rem; }
+
+.pt-header-utilisateur {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+}
+
+.pt-nav {
+  display: flex;
+  background: var(--bfs-gris);
+}
+
+.pt-nav-item {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  background: transparent;
+  color: var(--bfs-blanc);
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pt-nav-item-actif {
+  background: var(--bfs-jaune);
+  color: var(--bfs-noir);
+}
+
+.pt-contenu {
+  padding: 16px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.pt-carte {
+  background: var(--bfs-blanc);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.pt-btn {
+  background: var(--bfs-jaune);
+  color: var(--bfs-noir);
+  border: none;
+  border-radius: 6px;
+  padding: 12px 18px;
+  font-family: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pt-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.pt-btn-secondaire {
+  background: var(--bfs-gris);
+  color: var(--bfs-blanc);
+}
+
+.pt-btn-petit { padding: 6px 10px; font-size: 0.85rem; }
+
+.pt-btn-grand {
+  display: block;
+  width: 100%;
+  padding: 20px;
+  font-size: 1.1rem;
+  margin: 12px 0;
+}
+
+.pt-liste-horodatages, .pt-liste-activites {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.pt-liste-horodatages li, .pt-liste-activites li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-liste-vide { color: var(--bfs-gris); font-style: italic; }
+
+.pt-badge {
+  background: var(--bfs-gris-clair);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  color: var(--bfs-gris);
+}
+
+.pt-alerte {
+  background: #fdecea;
+  color: var(--bfs-rouge);
+  border: 1px solid var(--bfs-rouge);
+  border-radius: 6px;
+  padding: 10px;
+  font-weight: 600;
+}
+
+.pt-message-erreur {
+  background: #fdecea;
+  color: var(--bfs-rouge);
+  border: 1px solid var(--bfs-rouge);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 16px;
+}
+
+.pt-info { color: var(--bfs-gris); }
+
+.pt-login {
+  max-width: 360px;
+  margin: 80px auto;
+  padding: 24px;
+  background: var(--bfs-blanc);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.pt-login h1 {
+  text-align: center;
+  color: var(--bfs-gris);
+  margin-bottom: 24px;
+}
+
+.pt-login form, .pt-form-manuel, .pt-form-activite {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pt-login label, .pt-form-manuel label, .pt-form-activite label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--bfs-gris);
+}
+
+.pt-login input, .pt-form-manuel input, .pt-form-manuel select,
+.pt-form-activite input, .pt-form-activite select {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+.pt-form-manuel { margin-top: 12px; }
