@@ -22,14 +22,18 @@ const S = {
   activitesJour: [],
   centres: [],
   deplacementsRecents: [],
+  horodatagesTrajetTous: [],
+  suiviNbJours: 14,
+  suiviHorodatages: [],
+  suiviActivites: [],
 };
 
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade
 // de if/else --------------------------------------------------------------
 const PT_ONGLETS_PAR_ROLE = {
-  technicien: [{ id: 'pointage', label: 'Pointage' }],
-  admin: [{ id: 'pointage', label: 'Pointage' }, { id: 'admin', label: 'Administration' }],
-  secretariat: [{ id: 'pointage', label: 'Pointage' }, { id: 'secretariat', label: 'Gestion' }],
+  technicien: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }],
+  admin: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'admin', label: 'Administration' }],
+  secretariat: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'secretariat', label: 'Gestion' }],
 };
 
 // --- Auth -------------------------------------------------------------

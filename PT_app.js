@@ -138,12 +138,119 @@ function ptRenderApp(conteneur) {
     });
   });
 
-  const rendus = { pointage: ptRenderOngletPointage, admin: ptRenderOngletPlaceholder, secretariat: ptRenderOngletPlaceholder };
+  const rendus = {
+    pointage: ptRenderOngletPointage,
+    suivi: ptRenderOngletSuivi,
+    admin: ptRenderOngletPlaceholder,
+    secretariat: ptRenderOngletPlaceholder,
+  };
   (rendus[S.ongletActif] || ptRenderOngletPlaceholder)(document.getElementById('pt-contenu'));
 }
 
 function ptRenderOngletPlaceholder(conteneur) {
   conteneur.innerHTML = `<p>Écran à venir.</p>`;
+}
+
+// --- Onglet Suivi : historique des pointages, pour contrôle ---------------
+async function ptRenderOngletSuivi(conteneur) {
+  conteneur.innerHTML = `<p>Chargement…</p>`;
+  await ptChargerHistoriqueSuivi(S.suiviNbJours);
+
+  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours);
+
+  conteneur.innerHTML = `
+    <section class="pt-carte">
+      <h2>Suivi de mes pointages</h2>
+      <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
+      <ul class="pt-liste-suivi">
+        ${jours.map((j) => `
+          <li class="pt-jour-suivi">
+            <div class="pt-jour-suivi-entete">
+              <strong>${ptFormatDateCourte(j.date)}</strong>
+              ${j.horodatages.length === 0
+                ? '<span class="pt-badge">aucun pointage</span>'
+                : j.complet
+                  ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
+                  : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
+            </div>
+            ${j.horodatages.length > 0
+              ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
+              : ''}
+            ${j.activites.length > 0
+              ? `<div class="pt-jour-suivi-details">Activités : ${j.activites.map((a) => PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite).join(', ')}</div>`
+              : ''}
+          </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
+      </ul>
+      <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>
+    </section>`;
+
+  document.getElementById('pt-btn-suivi-plus').addEventListener('click', () => {
+    S.suiviNbJours += 14;
+    ptRenderOngletSuivi(conteneur);
+  });
+}
+
+async function ptChargerHistoriqueSuivi(nbJours) {
+  const dateDebut = new Date();
+  dateDebut.setDate(dateDebut.getDate() - nbJours);
+  const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
+
+  const [horodatages, activites] = await Promise.all([
+    ptSupabase
+      .from('horodatages')
+      .select('date, moment, type_horodatage')
+      .eq('technicien_id', S.session.user.id)
+      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
+      .gte('date', dateDebutIso)
+      .order('moment', { ascending: true }),
+    ptSupabase
+      .from('activites')
+      .select('date, type_activite')
+      .eq('technicien_id', S.session.user.id)
+      .gte('date', dateDebutIso),
+  ]);
+  if (horodatages.error) throw horodatages.error;
+  if (activites.error) throw activites.error;
+  S.suiviHorodatages = horodatages.data;
+  S.suiviActivites = activites.data;
+}
+
+// Regroupe les horodatages/activités par jour et calcule le total d'heures
+// effectives (arrivée -> départ, moins la pause) quand la journée a ses
+// 4 horodatages principaux.
+function ptRegrouperParJour(horodatages, activites, nbJours) {
+  const jours = [];
+  for (let i = 0; i < nbJours; i += 1) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const dateIso = date.toLocaleDateString('sv-SE');
+
+    const horodatagesJour = horodatages.filter((h) => h.date === dateIso);
+    const activitesJour = activites.filter((a) => a.date === dateIso);
+    const { heures, complet } = ptCalculerHeuresJour(horodatagesJour);
+
+    jours.push({ date: dateIso, horodatages: horodatagesJour, activites: activitesJour, heures, complet });
+  }
+  return jours;
+}
+
+function ptCalculerHeuresJour(horodatagesJour) {
+  const trouver = (type) => horodatagesJour.find((h) => h.type_horodatage === type);
+  const arrivee = trouver('arrivee');
+  const depart = trouver('depart');
+  if (!arrivee || !depart) return { heures: null, complet: false };
+
+  let totalMs = new Date(depart.moment) - new Date(arrivee.moment);
+  const pauseDebut = trouver('pause_debut');
+  const pauseFin = trouver('pause_fin');
+  if (pauseDebut && pauseFin) {
+    totalMs -= new Date(pauseFin.moment) - new Date(pauseDebut.moment);
+  }
+  return { heures: totalMs / 3_600_000, complet: true };
+}
+
+function ptFormatDateCourte(dateIso) {
+  return new Date(`${dateIso}T00:00:00`).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
 // --- Onglet Pointage : bouton intelligent + activités --------------------
@@ -154,6 +261,7 @@ async function ptRenderOngletPointage(conteneur) {
     ptChargerActivitesJour(),
     ptChargerCentres(),
     ptChargerDeplacementsRecents(),
+    ptChargerHorodatagesTrajetTous(),
   ]);
 
   const horodatagesPrincipaux = S.horodatagesJour.filter((h) => h.type_horodatage in PT_TYPES_HORODATAGE);
@@ -162,6 +270,9 @@ async function ptRenderOngletPointage(conteneur) {
   const prochaine = ptProchaineAction(horodatagesPrincipaux);
   const alerte = ptVerifierAlertePause(horodatagesPrincipaux);
   const prochainTrajet = ptProchaineActionTrajet(horodatagesTrajet);
+  const sejoursInterAgence = S.profil.agence_rattachement
+    ? ptCalculerSejoursInterAgence(S.horodatagesTrajetTous)
+    : [];
 
   conteneur.innerHTML = `
     <section class="pt-carte">
@@ -227,9 +338,19 @@ async function ptRenderOngletPointage(conteneur) {
     </section>
 
     <section class="pt-carte">
-      <h2>Nuit en déplacement</h2>
-      <p class="pt-info">À utiliser le soir, quand tu es en déplacement avec nuitée (ex. départ dimanche pour la Vendée).</p>
-      <label>Destination <input type="text" id="pt-nuitee-commentaire" maxlength="100" placeholder="Ex. Vendée" /></label>
+      <h2>Nuits inter-agence (calcul automatique)</h2>
+      ${S.profil.agence_rattachement
+        ? `<p class="pt-info">Calculé à partir de tes trajets pointés et de ton agence de rattachement (${ptEchapperHtml(ptLibelleCentre(S.profil.agence_rattachement))}).</p>
+           <ul class="pt-liste-activites">
+             ${sejoursInterAgence.map((s) => `<li>Arrivée le ${s.dateArrivee} ${s.dateDepart ? `— retour le ${s.dateDepart}` : '— en cours'} — ${s.nuits} nuit(s)</li>`).join('') || '<li class="pt-liste-vide">Aucun séjour inter-agence détecté récemment.</li>'}
+           </ul>`
+        : `<p class="pt-info">Ton agence de rattachement n'est pas encore renseignée par l'admin — le calcul automatique n'est pas actif.</p>`}
+    </section>
+
+    <section class="pt-carte">
+      <h2>Nuit en déplacement chez un client</h2>
+      <p class="pt-info">Pour un déplacement chez un client (centre Intra), à utiliser le soir quand tu as une nuitée (ex. départ dimanche pour la Vendée). Pas besoin pour un trajet entre BFS 85 et BFS 29 : ça se calcule automatiquement ci-dessus.</p>
+      <label>Destination <input type="text" id="pt-nuitee-commentaire" maxlength="100" placeholder="Ex. client XYZ" /></label>
       <div class="pt-nuitee-boutons">
         <button id="pt-btn-nuitee-avec" class="pt-btn pt-btn-petit">+ Nuitée avec petit-déj</button>
         <button id="pt-btn-nuitee-sans" class="pt-btn pt-btn-secondaire pt-btn-petit">+ Nuitée sans petit-déj</button>
@@ -342,6 +463,49 @@ function ptProchaineActionTrajet(horodatagesTrajet) {
   return { type: config.suivant, label: PT_TYPES_TRAJET[config.suivant].label };
 }
 
+// Calcule les séjours "à l'autre agence" à partir de l'historique des
+// trajets inter-site pointés et de l'agence de rattachement du salarié.
+// Hypothèse (décidée avec Jeremy) : le centre de chaque trajet est déduit
+// par alternance, pas ressaisi à chaque pointage — le 1er trajet du jour
+// (toutes dates confondues) part de l'agence de rattachement. Peut se
+// désynchroniser si un pointage de trajet est oublié.
+function ptCalculerSejoursInterAgence(horodatagesTrajetTous) {
+  const sejours = [];
+  let position = 'maison'; // 'maison' = agence de rattachement, 'away' = l'autre agence
+  let dateArriveeAway = null;
+
+  for (const evenement of horodatagesTrajetTous) {
+    const dateEvenement = evenement.date;
+    if (evenement.type_horodatage === 'trajet_inter_site_fin') {
+      if (position === 'maison') {
+        position = 'away';
+        dateArriveeAway = dateEvenement;
+      } else {
+        position = 'maison';
+      }
+    } else if (evenement.type_horodatage === 'trajet_inter_site_debut') {
+      if (position === 'away' && dateArriveeAway) {
+        const nuits = ptNombreJoursEntre(dateArriveeAway, dateEvenement);
+        sejours.push({ dateArrivee: dateArriveeAway, dateDepart: dateEvenement, nuits });
+        dateArriveeAway = null;
+      }
+    }
+  }
+
+  // Séjour toujours en cours (pas encore de trajet retour pointé).
+  if (position === 'away' && dateArriveeAway) {
+    const nuits = ptNombreJoursEntre(dateArriveeAway, ptDateDuJour());
+    sejours.push({ dateArrivee: dateArriveeAway, dateDepart: null, nuits });
+  }
+
+  return sejours.reverse(); // le plus récent en premier
+}
+
+function ptNombreJoursEntre(dateDebutIso, dateFinIso) {
+  const jour = 24 * 60 * 60 * 1000;
+  return Math.max(0, Math.round((new Date(dateFinIso) - new Date(dateDebutIso)) / jour));
+}
+
 // Règle CCN IDCC 1516 (accord RTT du 6 décembre 1999, titre II art. 2) :
 // aucune période de travail effectif ne peut excéder 6h consécutives.
 function ptVerifierAlertePause(horodatages) {
@@ -411,6 +575,23 @@ async function ptAjouterActivite(champs) {
 // date_retour = aujourd'hui). Pour un déplacement de plusieurs nuits,
 // plusieurs lignes s'accumulent — l'admin/secrétariat pourra les
 // consolider plus tard si besoin (backlog).
+// Historique complet (180 derniers jours) des trajets inter-agence, utilisé
+// par ptCalculerSejoursInterAgence pour reconstituer les séjours par
+// alternance depuis l'agence de rattachement.
+async function ptChargerHorodatagesTrajetTous() {
+  const centQuatreVingtJoursAvant = new Date();
+  centQuatreVingtJoursAvant.setDate(centQuatreVingtJoursAvant.getDate() - 180);
+  const { data, error } = await ptSupabase
+    .from('horodatages')
+    .select('date, moment, type_horodatage')
+    .eq('technicien_id', S.session.user.id)
+    .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
+    .gte('date', centQuatreVingtJoursAvant.toLocaleDateString('sv-SE'))
+    .order('moment', { ascending: true });
+  if (error) throw error;
+  S.horodatagesTrajetTous = data;
+}
+
 async function ptChargerDeplacementsRecents() {
   const trenteJoursAvant = new Date();
   trenteJoursAvant.setDate(trenteJoursAvant.getDate() - 30);

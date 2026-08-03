@@ -191,3 +191,36 @@ body {
   margin: 10px 0;
   flex-wrap: wrap;
 }
+
+.pt-liste-suivi {
+  list-style: none;
+  padding: 0;
+  margin: 12px 0;
+}
+
+.pt-jour-suivi {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-jour-suivi-entete {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pt-jour-suivi-details {
+  font-size: 0.85rem;
+  color: var(--bfs-gris);
+  margin-top: 4px;
+}
+
+.pt-badge-ok {
+  background: #e6f4ea;
+  color: #1e7e34;
+}
+
+.pt-badge-alerte {
+  background: #fdecea;
+  color: var(--bfs-rouge);
+}
