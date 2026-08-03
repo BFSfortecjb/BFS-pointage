@@ -151,42 +151,118 @@ function ptRenderOngletPlaceholder(conteneur) {
   conteneur.innerHTML = `<p>Écran à venir.</p>`;
 }
 
-// --- Onglet Suivi : historique des pointages, pour contrôle ---------------
+// --- Onglet Suivi : historique jour par jour + récap mensuel/annuel ------
 async function ptRenderOngletSuivi(conteneur) {
   conteneur.innerHTML = `<p>Chargement…</p>`;
-  await ptChargerHistoriqueSuivi(S.suiviNbJours);
-
-  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours);
 
   conteneur.innerHTML = `
     <section class="pt-carte">
       <h2>Suivi de mes pointages</h2>
-      <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
-      <ul class="pt-liste-suivi">
-        ${jours.map((j) => `
-          <li class="pt-jour-suivi">
-            <div class="pt-jour-suivi-entete">
-              <strong>${ptFormatDateCourte(j.date)}</strong>
-              ${j.horodatages.length === 0
-                ? '<span class="pt-badge">aucun pointage</span>'
-                : j.complet
-                  ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
-                  : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
-            </div>
-            ${j.horodatages.length > 0
-              ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
-              : ''}
-            ${j.activites.length > 0
-              ? `<div class="pt-jour-suivi-details">Activités : ${j.activites.map((a) => PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite).join(', ')}</div>`
-              : ''}
-          </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
-      </ul>
-      <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>
+      <div class="pt-suivi-onglets">
+        <button id="pt-suivi-vue-jour" class="pt-btn ${S.suiviVue === 'jour' ? '' : 'pt-btn-secondaire'} pt-btn-petit">Jour par jour</button>
+        <button id="pt-suivi-vue-recap" class="pt-btn ${S.suiviVue === 'recap' ? '' : 'pt-btn-secondaire'} pt-btn-petit">Récap mensuel</button>
+      </div>
+      <div id="pt-suivi-contenu"></div>
     </section>`;
+
+  document.getElementById('pt-suivi-vue-jour').addEventListener('click', () => {
+    S.suiviVue = 'jour';
+    ptRenderOngletSuivi(conteneur);
+  });
+  document.getElementById('pt-suivi-vue-recap').addEventListener('click', () => {
+    S.suiviVue = 'recap';
+    ptRenderOngletSuivi(conteneur);
+  });
+
+  const zoneContenu = document.getElementById('pt-suivi-contenu');
+  if (S.suiviVue === 'recap') {
+    await ptRenderRecapAnnuel(zoneContenu, conteneur);
+  } else {
+    await ptRenderSuiviJourParJour(zoneContenu, conteneur);
+  }
+}
+
+async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
+  await ptChargerHistoriqueSuivi(S.suiviNbJours);
+  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours);
+
+  zoneContenu.innerHTML = `
+    <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
+    <ul class="pt-liste-suivi">
+      ${jours.map((j) => `
+        <li class="pt-jour-suivi">
+          <div class="pt-jour-suivi-entete">
+            <strong>${ptFormatDateCourte(j.date)}</strong>
+            ${j.horodatages.length === 0
+              ? '<span class="pt-badge">aucun pointage</span>'
+              : j.complet
+                ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
+                : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
+          </div>
+          ${j.horodatages.length > 0
+            ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
+            : ''}
+          ${j.activites.length > 0
+            ? `<div class="pt-jour-suivi-details">Activités : ${j.activites.map((a) => PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite).join(', ')}</div>`
+            : ''}
+        </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
+    </ul>
+    <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
 
   document.getElementById('pt-btn-suivi-plus').addEventListener('click', () => {
     S.suiviNbJours += 14;
-    ptRenderOngletSuivi(conteneur);
+    ptRenderSuiviJourParJour(zoneContenu, conteneur);
+  });
+}
+
+const PT_LABELS_MOIS = [
+  'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
+];
+
+async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
+  zoneContenu.innerHTML = `<p>Calcul en cours…</p>`;
+  const recap = await ptCalculerRecapAnnee(S.suiviAnnee);
+
+  zoneContenu.innerHTML = `
+    <div class="pt-suivi-annee-nav">
+      <button id="pt-annee-prec" class="pt-btn pt-btn-secondaire pt-btn-petit">« ${S.suiviAnnee - 1}</button>
+      <strong>${S.suiviAnnee}</strong>
+      <button id="pt-annee-suiv" class="pt-btn pt-btn-secondaire pt-btn-petit">${S.suiviAnnee + 1} »</button>
+    </div>
+    <p class="pt-info">RTT dispo = estimation (heures 35-39h/semaine accumulées, moins RTT pris convertis à 7h/jour), calculée depuis le 1er janvier de l'année affichée — sans solde reporté des années précédentes. Jours de déplacement = nuits chez un client + nuits inter-agence détectées.</p>
+    <table class="pt-table-recap">
+      <thead>
+        <tr><th>Mois</th><th>Heures</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th></tr>
+      </thead>
+      <tbody>
+        ${recap.mois.map((m) => `
+          <tr>
+            <td>${m.label}</td>
+            <td>${m.heures.toFixed(2).replace('.', ',')}</td>
+            <td>${m.joursDeplacement}</td>
+            <td>${m.rttPrisJours}</td>
+            <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td><strong>Total</strong></td>
+          <td><strong>${recap.total.heures.toFixed(2).replace('.', ',')}</strong></td>
+          <td><strong>${recap.total.joursDeplacement}</strong></td>
+          <td><strong>${recap.total.rttPrisJours}</strong></td>
+          <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
+        </tr>
+      </tfoot>
+    </table>`;
+
+  document.getElementById('pt-annee-prec').addEventListener('click', () => {
+    S.suiviAnnee -= 1;
+    ptRenderRecapAnnuel(zoneContenu, conteneur);
+  });
+  document.getElementById('pt-annee-suiv').addEventListener('click', () => {
+    S.suiviAnnee += 1;
+    ptRenderRecapAnnuel(zoneContenu, conteneur);
   });
 }
 
@@ -251,6 +327,143 @@ function ptCalculerHeuresJour(horodatagesJour) {
 
 function ptFormatDateCourte(dateIso) {
   return new Date(`${dateIso}T00:00:00`).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+// --- Récap annuel/mensuel (heures, jours de déplacement, RTT) ------------
+const PT_HEURES_JOUR_RTT = 7; // conversion jours -> heures pour les RTT pris (approximation documentée)
+
+function ptLundiDeLaSemaine(dateIso) {
+  const d = new Date(`${dateIso}T00:00:00`);
+  const jour = (d.getDay() + 6) % 7; // lundi = 0 ... dimanche = 6
+  d.setDate(d.getDate() - jour);
+  return d.toLocaleDateString('sv-SE');
+}
+
+function ptElargirPlage(dateDebutIso, dateFinIso) {
+  const dates = [];
+  const d = new Date(`${dateDebutIso}T00:00:00`);
+  const fin = new Date(`${dateFinIso}T00:00:00`);
+  while (d <= fin) {
+    dates.push(d.toLocaleDateString('sv-SE'));
+    d.setDate(d.getDate() + 1);
+  }
+  return dates;
+}
+
+async function ptCalculerRecapAnnee(annee) {
+  const debutAnnee = `${annee}-01-01`;
+  const finAnnee = `${annee}-12-31`;
+
+  const [horodatagesRes, deplacementsRes, congesRttRes, trajetsRes] = await Promise.all([
+    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+      .eq('technicien_id', S.session.user.id)
+      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
+      .gte('date', debutAnnee).lte('date', finAnnee),
+    ptSupabase.from('deplacements').select('date_aller, date_retour')
+      .eq('technicien_id', S.session.user.id)
+      .gte('date_aller', debutAnnee).lte('date_aller', finAnnee),
+    ptSupabase.from('conges').select('date_debut, date_fin')
+      .eq('technicien_id', S.session.user.id)
+      .eq('type_conge', 'rtt').eq('statut', 'accorde')
+      .lte('date_debut', finAnnee).gte('date_fin', debutAnnee),
+    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+      .eq('technicien_id', S.session.user.id)
+      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
+      .order('moment', { ascending: true }),
+  ]);
+  for (const res of [horodatagesRes, deplacementsRes, congesRttRes, trajetsRes]) {
+    if (res.error) throw res.error;
+  }
+
+  // 1. Heures effectives par jour, puis regroupées par semaine (clé = lundi).
+  const joursUniques = [...new Set(horodatagesRes.data.map((h) => h.date))];
+  const heuresParSemaine = {}; // lundi -> total heures
+  for (const dateIso of joursUniques) {
+    const { heures, complet } = ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso));
+    if (!complet) continue;
+    const lundi = ptLundiDeLaSemaine(dateIso);
+    heuresParSemaine[lundi] = (heuresParSemaine[lundi] || 0) + heures;
+  }
+
+  // 2. Jours de déplacement : nuitées manuelles (deplacements) + nuits
+  // inter-agence calculées automatiquement, sur l'ensemble de l'historique
+  // des trajets (nécessaire pour détecter un séjour en cours à cheval sur
+  // l'année affichée).
+  const datesDeplacement = new Set();
+  for (const d of deplacementsRes.data) {
+    for (const date of ptElargirPlage(d.date_aller, d.date_retour || d.date_aller)) datesDeplacement.add(date);
+  }
+  const sejours = ptCalculerSejoursInterAgence(trajetsRes.data);
+  for (const s of sejours) {
+    const finSejour = s.dateDepart ? ptJourPrecedent(s.dateDepart) : ptDateDuJour();
+    for (const date of ptElargirPlage(s.dateArrivee, finSejour)) datesDeplacement.add(date);
+  }
+
+  // 3. RTT pris (en jours calendaires de congés accordés, puis converti en
+  // heures à titre indicatif).
+  const datesRttPrises = new Set();
+  for (const c of congesRttRes.data) {
+    for (const date of ptElargirPlage(c.date_debut, c.date_fin)) datesRttPrises.add(date);
+  }
+
+  // 4. Construction des 12 mois + cumul du solde RTT dispo.
+  const mois = [];
+  let cumulAccumule = 0;
+  let cumulPris = 0;
+  for (let m = 0; m < 12; m += 1) {
+    const premierJourMois = new Date(annee, m, 1);
+    const dernierJourMois = new Date(annee, m + 1, 0);
+
+    let heuresMois = 0;
+    for (const dateIso of joursUniques) {
+      const d = new Date(`${dateIso}T00:00:00`);
+      if (d >= premierJourMois && d <= dernierJourMois) {
+        heuresMois += ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
+      }
+    }
+
+    let rttAccumuleMois = 0;
+    for (const [lundiIso, totalSemaine] of Object.entries(heuresParSemaine)) {
+      const lundi = new Date(`${lundiIso}T00:00:00`);
+      if (lundi.getFullYear() === annee && lundi.getMonth() === m) {
+        rttAccumuleMois += Math.min(Math.max(totalSemaine - 35, 0), 4);
+      }
+    }
+
+    let joursDeplacementMois = 0;
+    let rttPrisJoursMois = 0;
+    for (let jour = 1; jour <= dernierJourMois.getDate(); jour += 1) {
+      const dateIso = new Date(annee, m, jour).toLocaleDateString('sv-SE');
+      if (datesDeplacement.has(dateIso)) joursDeplacementMois += 1;
+      if (datesRttPrises.has(dateIso)) rttPrisJoursMois += 1;
+    }
+
+    cumulAccumule += rttAccumuleMois;
+    cumulPris += rttPrisJoursMois * PT_HEURES_JOUR_RTT;
+
+    mois.push({
+      label: PT_LABELS_MOIS[m],
+      heures: heuresMois,
+      joursDeplacement: joursDeplacementMois,
+      rttPrisJours: rttPrisJoursMois,
+      rttDispoHeures: cumulAccumule - cumulPris,
+    });
+  }
+
+  const total = mois.reduce((acc, m) => ({
+    heures: acc.heures + m.heures,
+    joursDeplacement: acc.joursDeplacement + m.joursDeplacement,
+    rttPrisJours: acc.rttPrisJours + m.rttPrisJours,
+    rttDispoHeures: mois[mois.length - 1].rttDispoHeures,
+  }), { heures: 0, joursDeplacement: 0, rttPrisJours: 0, rttDispoHeures: 0 });
+
+  return { mois, total };
+}
+
+function ptJourPrecedent(dateIso) {
+  const d = new Date(`${dateIso}T00:00:00`);
+  d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString('sv-SE');
 }
 
 // --- Onglet Pointage : bouton intelligent + activités --------------------

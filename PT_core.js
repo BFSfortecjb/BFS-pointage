@@ -26,6 +26,8 @@ const S = {
   suiviNbJours: 14,
   suiviHorodatages: [],
   suiviActivites: [],
+  suiviVue: 'jour', // 'jour' ou 'recap'
+  suiviAnnee: new Date().getFullYear(),
 };
 
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade

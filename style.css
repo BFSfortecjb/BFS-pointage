@@ -224,3 +224,37 @@ body {
   background: #fdecea;
   color: var(--bfs-rouge);
 }
+
+.pt-suivi-onglets {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pt-suivi-annee-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.pt-table-recap {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.pt-table-recap th, .pt-table-recap td {
+  text-align: right;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-table-recap th:first-child, .pt-table-recap td:first-child {
+  text-align: left;
+}
+
+.pt-table-recap tfoot td {
+  border-top: 2px solid var(--bfs-gris);
+  border-bottom: none;
+}

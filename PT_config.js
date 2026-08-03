@@ -15,5 +15,7 @@ const PT_CONFIG = {
   STORAGE_KEY_AUTH: 'pointage_auth',
 
   // Version du cache du service worker — à incrémenter à chaque mise en ligne.
-  VERSION_CACHE: 'pointage-v1',
+  // Doit rester synchronisée avec la constante VERSION_CACHE de
+  // PT_service-worker.js (le service worker ne peut pas lire ce fichier).
+  VERSION_CACHE: 'pointage-v2',
 };
