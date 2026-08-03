@@ -21,6 +21,7 @@ const S = {
   horodatagesJour: [],
   activitesJour: [],
   centres: [],
+  formations: [],
   deplacementsRecents: [],
   horodatagesTrajetTous: [],
   suiviNbJours: 14,
@@ -91,6 +92,17 @@ async function ptChargerCentres() {
     .order('libelle');
   if (error) throw error;
   S.centres = data;
+  return data;
+}
+
+async function ptChargerFormations() {
+  const { data, error } = await ptSupabase
+    .from('formations')
+    .select('code, libelle')
+    .eq('actif', true)
+    .order('libelle');
+  if (error) throw error;
+  S.formations = data;
   return data;
 }
 

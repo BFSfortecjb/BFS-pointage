@@ -31,11 +31,16 @@ const PT_LABELS_HORODATAGE = {
   trajet_inter_site_fin: 'Arrivée trajet inter-agence',
 };
 
+// Catégories alignées sur la CCN IDCC 1516 (accord RTT 1999, art. 10.3) :
+// Acte de Formation (AF), Préparation-Recherche (PR), Activités Connexes
+// (AC), + Contrôle et Travaux divers propres à BFS. "acte_formation"
+// impose ensuite de choisir une formation précise (table formations).
 const PT_LABELS_ACTIVITE = {
-  formation: 'Formation',
+  acte_formation: 'Action de formation',
   controle: 'Contrôle',
+  preparation_recherche: 'Préparation / administratif',
+  activite_connexe: 'Activité connexe',
   travaux_divers: 'Travaux divers',
-  developpement_pedagogique: 'Développement pédagogique',
   autre: 'Autre',
 };
 
@@ -694,6 +699,7 @@ async function ptRenderOngletPointage(conteneur) {
     ptChargerHorodatagesJour(),
     ptChargerActivitesJour(),
     ptChargerCentres(),
+    ptChargerFormations(),
     ptChargerDeplacementsRecents(),
     ptChargerHorodatagesTrajetTous(),
   ]);
@@ -750,12 +756,18 @@ async function ptRenderOngletPointage(conteneur) {
     <section class="pt-carte">
       <h2>Activité du jour</h2>
       <ul class="pt-liste-activites">
-        ${S.activitesJour.map((a) => `<li><strong>${PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite}</strong>${a.centre_code ? ` — ${ptEchapperHtml(ptLibelleCentre(a.centre_code))}` : ''}${a.heure_debut ? ` — ${a.heure_debut.slice(0, 5)}` : ''}${a.heure_fin ? `–${a.heure_fin.slice(0, 5)}` : ''}${a.commentaire ? ` — ${ptEchapperHtml(a.commentaire)}` : ''}</li>`).join('') || '<li class="pt-liste-vide">Aucune activité renseignée.</li>'}
+        ${S.activitesJour.map((a) => `<li><strong>${PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite}</strong>${a.formation_code ? ` — ${ptEchapperHtml(ptLibelleFormation(a.formation_code))}` : ''}${a.centre_code ? ` — ${ptEchapperHtml(ptLibelleCentre(a.centre_code))}` : ''}${a.heure_debut ? ` — ${a.heure_debut.slice(0, 5)}` : ''}${a.heure_fin ? `–${a.heure_fin.slice(0, 5)}` : ''}${a.commentaire ? ` — ${ptEchapperHtml(a.commentaire)}` : ''}</li>`).join('') || '<li class="pt-liste-vide">Aucune activité renseignée.</li>'}
       </ul>
       <form id="pt-form-activite" class="pt-form-activite">
-        <label>Type
-          <select name="type_activite">
+        <label>Catégorie
+          <select name="type_activite" id="pt-activite-type">
             ${Object.entries(PT_LABELS_ACTIVITE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
+          </select>
+        </label>
+        <label id="pt-activite-formation-champ">Formation
+          <select name="formation_code">
+            <option value="">—</option>
+            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
           </select>
         </label>
         <label>Centre
@@ -766,7 +778,7 @@ async function ptRenderOngletPointage(conteneur) {
         </label>
         <label>Début <input type="time" name="heure_debut" /></label>
         <label>Fin <input type="time" name="heure_fin" /></label>
-        <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+        <label>Commentaire (détail libre, ex. pour travaux divers) <input type="text" name="commentaire" maxlength="200" /></label>
         <button type="submit" class="pt-btn pt-btn-petit">Ajouter l'activité</button>
       </form>
     </section>
@@ -855,12 +867,21 @@ async function ptRenderOngletPointage(conteneur) {
     }
   });
 
+  const champTypeActivite = document.getElementById('pt-activite-type');
+  const champFormation = document.getElementById('pt-activite-formation-champ');
+  const majAffichageFormation = () => {
+    champFormation.style.display = champTypeActivite.value === 'acte_formation' ? '' : 'none';
+  };
+  majAffichageFormation();
+  champTypeActivite.addEventListener('change', majAffichageFormation);
+
   document.getElementById('pt-form-activite').addEventListener('submit', async (evenement) => {
     evenement.preventDefault();
     const formulaire = new FormData(evenement.target);
     try {
       await ptAjouterActivite({
         type_activite: formulaire.get('type_activite'),
+        formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
         centre_code: formulaire.get('centre_code') || null,
         heure_debut: formulaire.get('heure_debut') || null,
         heure_fin: formulaire.get('heure_fin') || null,
@@ -875,6 +896,10 @@ async function ptRenderOngletPointage(conteneur) {
 
 function ptLibelleCentre(code) {
   return S.centres.find((c) => c.code === code)?.libelle || code;
+}
+
+function ptLibelleFormation(code) {
+  return S.formations.find((f) => f.code === code)?.libelle || code;
 }
 
 // --- Logique du bouton intelligent -----------------------------------
