@@ -155,31 +155,36 @@ function ptRenderOngletPlaceholder(conteneur) {
 async function ptRenderOngletSuivi(conteneur) {
   conteneur.innerHTML = `<p>Chargement…</p>`;
 
+  const vues = [
+    { id: 'jour', label: 'Jour par jour' },
+    { id: 'recap', label: 'Récap mensuel' },
+    { id: 'deplacements', label: 'Déplacements' },
+    { id: 'conges', label: 'Congés' },
+  ];
+
   conteneur.innerHTML = `
     <section class="pt-carte">
       <h2>Suivi de mes pointages</h2>
       <div class="pt-suivi-onglets">
-        <button id="pt-suivi-vue-jour" class="pt-btn ${S.suiviVue === 'jour' ? '' : 'pt-btn-secondaire'} pt-btn-petit">Jour par jour</button>
-        <button id="pt-suivi-vue-recap" class="pt-btn ${S.suiviVue === 'recap' ? '' : 'pt-btn-secondaire'} pt-btn-petit">Récap mensuel</button>
+        ${vues.map((v) => `<button class="pt-btn ${S.suiviVue === v.id ? '' : 'pt-btn-secondaire'} pt-btn-petit" data-vue="${v.id}">${v.label}</button>`).join('')}
       </div>
       <div id="pt-suivi-contenu"></div>
     </section>`;
 
-  document.getElementById('pt-suivi-vue-jour').addEventListener('click', () => {
-    S.suiviVue = 'jour';
-    ptRenderOngletSuivi(conteneur);
-  });
-  document.getElementById('pt-suivi-vue-recap').addEventListener('click', () => {
-    S.suiviVue = 'recap';
-    ptRenderOngletSuivi(conteneur);
+  document.querySelectorAll('.pt-suivi-onglets button').forEach((bouton) => {
+    bouton.addEventListener('click', () => {
+      S.suiviVue = bouton.dataset.vue;
+      ptRenderOngletSuivi(conteneur);
+    });
   });
 
   const zoneContenu = document.getElementById('pt-suivi-contenu');
-  if (S.suiviVue === 'recap') {
-    await ptRenderRecapAnnuel(zoneContenu, conteneur);
-  } else {
-    await ptRenderSuiviJourParJour(zoneContenu, conteneur);
-  }
+  const rendusSuivi = {
+    recap: ptRenderRecapAnnuel,
+    deplacements: ptRenderDeplacementsRecap,
+    conges: ptRenderCongesSuivi,
+  };
+  await (rendusSuivi[S.suiviVue] || ptRenderSuiviJourParJour)(zoneContenu, conteneur);
 }
 
 async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
@@ -466,7 +471,223 @@ function ptJourPrecedent(dateIso) {
   return d.toLocaleDateString('sv-SE');
 }
 
-// --- Onglet Pointage : bouton intelligent + activités --------------------
+function ptJourSuivant(dateIso) {
+  const d = new Date(`${dateIso}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toLocaleDateString('sv-SE');
+}
+
+// --- Récap des déplacements : regroupé par mois puis par séjour, comme le
+// fichier Excel de référence (une ligne par voyage, pas par nuit) ---------
+async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
+  zoneContenu.innerHTML = `<p>Calcul en cours…</p>`;
+  const annee = S.suiviAnnee;
+  const finAnnee = `${annee}-12-31`;
+
+  const [deplacementsRes, trajetsRes] = await Promise.all([
+    ptSupabase.from('deplacements').select('date_aller, date_retour, nuitees_avec_petit_dej, nuitees_sans_petit_dej, commentaire')
+      .eq('technicien_id', S.session.user.id)
+      .gte('date_aller', `${annee}-01-01`).lte('date_aller', finAnnee)
+      .order('date_aller', { ascending: true }),
+    // Historique complet (pas seulement l'année) : nécessaire pour que la
+    // parité maison/away de ptCalculerSejoursInterAgence reste correcte.
+    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+      .eq('technicien_id', S.session.user.id)
+      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
+      .lte('date', finAnnee)
+      .order('moment', { ascending: true }),
+  ]);
+  if (deplacementsRes.error) throw deplacementsRes.error;
+  if (trajetsRes.error) throw trajetsRes.error;
+
+  const voyagesClient = ptRegrouperSejoursClient(deplacementsRes.data);
+  const voyagesInterAgence = ptCalculerSejoursInterAgence(trajetsRes.data)
+    .filter((s) => new Date(s.dateArrivee).getFullYear() === annee)
+    .map((s) => ({
+      type: 'inter_agence',
+      dateAller: s.dateArrivee,
+      dateRetour: s.dateDepart,
+      nuits: s.nuits,
+      nuiteesAvecPetitDej: null,
+      nuiteesSansPetitDej: null,
+      commentaire: s.dateDepart ? '' : 'En cours',
+    }));
+
+  const tousLesVoyages = [...voyagesClient, ...voyagesInterAgence]
+    .sort((a, b) => a.dateAller.localeCompare(b.dateAller));
+
+  const parMois = {};
+  for (const v of tousLesVoyages) {
+    const m = new Date(`${v.dateAller}T00:00:00`).getMonth();
+    (parMois[m] ||= []).push(v);
+  }
+
+  zoneContenu.innerHTML = `
+    <div class="pt-suivi-annee-nav">
+      <button id="pt-annee-prec" class="pt-btn pt-btn-secondaire pt-btn-petit">« ${annee - 1}</button>
+      <strong>${annee}</strong>
+      <button id="pt-annee-suiv" class="pt-btn pt-btn-secondaire pt-btn-petit">${annee + 1} »</button>
+    </div>
+    ${PT_LABELS_MOIS.map((label, m) => {
+      const voyagesMois = parMois[m];
+      if (!voyagesMois) return '';
+      return `
+        <h3 class="pt-recap-mois-titre">${label}</h3>
+        <table class="pt-table-recap">
+          <thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Nuitées</th><th>Avec p-déj</th><th>Sans p-déj</th><th>Commentaire</th></tr></thead>
+          <tbody>
+            ${voyagesMois.map((v) => `
+              <tr>
+                <td>${v.type === 'inter_agence' ? 'Inter-agence' : 'Client'}</td>
+                <td>${v.dateAller}</td>
+                <td>${v.dateRetour || 'en cours'}</td>
+                <td>${v.nuits}</td>
+                <td>${v.nuiteesAvecPetitDej ?? '—'}</td>
+                <td>${v.nuiteesSansPetitDej ?? '—'}</td>
+                <td>${ptEchapperHtml(v.commentaire || '')}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>`;
+    }).join('') || '<p class="pt-liste-vide">Aucun déplacement sur cette année.</p>'}`;
+
+  document.getElementById('pt-annee-prec').addEventListener('click', () => {
+    S.suiviAnnee -= 1;
+    ptRenderDeplacementsRecap(zoneContenu, conteneur);
+  });
+  document.getElementById('pt-annee-suiv').addEventListener('click', () => {
+    S.suiviAnnee += 1;
+    ptRenderDeplacementsRecap(zoneContenu, conteneur);
+  });
+}
+
+// Fusionne les lignes de nuitées consécutives (saisies nuit par nuit via
+// les boutons rapides) en un seul séjour, comme une ligne par voyage dans
+// l'Excel de référence.
+function ptRegrouperSejoursClient(deplacements) {
+  const nuits = deplacements
+    .map((d) => ({ date: d.date_aller, avec: d.nuitees_avec_petit_dej || 0, sans: d.nuitees_sans_petit_dej || 0, commentaire: d.commentaire }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const sejours = [];
+  for (const nuit of nuits) {
+    const dernier = sejours[sejours.length - 1];
+    if (dernier && ptJourSuivant(dernier.dernierNuitDate) === nuit.date) {
+      dernier.nuiteesAvecPetitDej += nuit.avec;
+      dernier.nuiteesSansPetitDej += nuit.sans;
+      dernier.nuits += 1;
+      dernier.dernierNuitDate = nuit.date;
+      dernier.dateRetour = ptJourSuivant(nuit.date);
+      if (nuit.commentaire && !dernier.commentaire.includes(nuit.commentaire)) {
+        dernier.commentaire = dernier.commentaire ? `${dernier.commentaire}, ${nuit.commentaire}` : nuit.commentaire;
+      }
+    } else {
+      sejours.push({
+        type: 'client',
+        dateAller: nuit.date,
+        dernierNuitDate: nuit.date,
+        dateRetour: ptJourSuivant(nuit.date),
+        nuits: 1,
+        nuiteesAvecPetitDej: nuit.avec,
+        nuiteesSansPetitDej: nuit.sans,
+        commentaire: nuit.commentaire || '',
+      });
+    }
+  }
+  return sejours;
+}
+
+// --- Congés : demande + historique -----------------------------------
+const PT_LABELS_CONGE = {
+  maladie: 'Maladie',
+  conge: 'Congé',
+  deces: 'Décès',
+  autres: 'Autres',
+  convention_sdis: 'Convention SDIS',
+  conge_parental: 'Congé parental',
+  conges_sans_solde: 'Congés sans solde',
+  rtt: 'RTT',
+};
+
+const PT_LABELS_STATUT_CONGE = {
+  en_attente: { label: 'En attente', classe: '' },
+  accorde: { label: 'Accordé', classe: 'pt-badge-ok' },
+  refuse: { label: 'Refusé', classe: 'pt-badge-alerte' },
+};
+
+async function ptRenderCongesSuivi(zoneContenu, conteneur) {
+  zoneContenu.innerHTML = `<p>Chargement…</p>`;
+  const { data, error } = await ptSupabase
+    .from('conges')
+    .select('*')
+    .eq('technicien_id', S.session.user.id)
+    .order('date_debut', { ascending: false });
+  if (error) throw error;
+
+  zoneContenu.innerHTML = `
+    <form id="pt-form-conge" class="pt-form-activite">
+      <label>Type de congé
+        <select name="type_conge">
+          ${Object.entries(PT_LABELS_CONGE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
+        </select>
+      </label>
+      <label>Date de début <input type="date" name="date_debut" required /></label>
+      <label>Date de fin <input type="date" name="date_fin" required /></label>
+      <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+      <button type="submit" class="pt-btn pt-btn-petit">Envoyer la demande</button>
+      <p id="pt-conge-erreur" class="pt-message-erreur" hidden></p>
+    </form>
+
+    <h3 class="pt-recap-mois-titre">Mes demandes</h3>
+    <ul class="pt-liste-suivi">
+      ${data.map((c) => {
+        const statut = PT_LABELS_STATUT_CONGE[c.statut] || PT_LABELS_STATUT_CONGE.en_attente;
+        return `
+          <li class="pt-jour-suivi">
+            <div class="pt-jour-suivi-entete">
+              <strong>${PT_LABELS_CONGE[c.type_conge] || c.type_conge}</strong>
+              <span class="pt-badge ${statut.classe}">${statut.label}</span>
+            </div>
+            <div class="pt-jour-suivi-details">${c.date_debut} → ${c.date_fin}${c.commentaire ? ` — ${ptEchapperHtml(c.commentaire)}` : ''}</div>
+          </li>`;
+      }).join('') || '<li class="pt-liste-vide">Aucune demande envoyée.</li>'}
+    </ul>`;
+
+  document.getElementById('pt-form-conge').addEventListener('submit', async (evenement) => {
+    evenement.preventDefault();
+    const formulaire = new FormData(evenement.target);
+    const erreurEl = document.getElementById('pt-conge-erreur');
+    erreurEl.hidden = true;
+    if (formulaire.get('date_fin') < formulaire.get('date_debut')) {
+      erreurEl.textContent = 'La date de fin doit être après la date de début.';
+      erreurEl.hidden = false;
+      return;
+    }
+    try {
+      await ptAjouterConge({
+        type_conge: formulaire.get('type_conge'),
+        date_debut: formulaire.get('date_debut'),
+        date_fin: formulaire.get('date_fin'),
+        commentaire: formulaire.get('commentaire') || null,
+      });
+      ptRenderCongesSuivi(zoneContenu, conteneur);
+    } catch (erreur) {
+      erreurEl.textContent = 'Échec de l\'envoi de la demande.';
+      erreurEl.hidden = false;
+      PT_DEBUG.log(`Échec ajout congé : ${erreur.message}`, true);
+    }
+  });
+}
+
+async function ptAjouterConge(champs) {
+  const { error } = await ptSupabase.from('conges').insert({
+    technicien_id: S.session.user.id,
+    statut: 'en_attente',
+    ...champs,
+  });
+  if (error) throw error;
+}
+
+// --- Onglet Pointage : bouton intelligent et activités --------------------
 async function ptRenderOngletPointage(conteneur) {
   conteneur.innerHTML = `<p>Chargement…</p>`;
   await Promise.all([

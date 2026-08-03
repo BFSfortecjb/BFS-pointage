@@ -258,3 +258,8 @@ body {
   border-top: 2px solid var(--bfs-gris);
   border-bottom: none;
 }
+
+.pt-recap-mois-titre {
+  margin: 18px 0 6px;
+  color: var(--bfs-gris);
+}
