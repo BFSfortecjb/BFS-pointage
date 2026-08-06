@@ -29,6 +29,10 @@ const S = {
   suiviActivites: [],
   suiviVue: 'jour', // 'jour' ou 'recap'
   suiviAnnee: new Date().getFullYear(),
+  adminVue: 'conges', // 'conges' | 'profils' | 'parametres'
+  secretariatVue: 'conges', // 'conges' | 'deplacements' | 'frais' | 'pointages'
+  secretariatTechnicienId: null, // technicien sélectionné pour la vue "Pointages" (lecture seule)
+  secretariatNbJours: 14,
 };
 
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade

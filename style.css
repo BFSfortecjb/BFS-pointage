@@ -263,3 +263,43 @@ body {
   margin: 18px 0 6px;
   color: var(--bfs-gris);
 }
+
+.pt-table-admin {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.pt-table-admin th, .pt-table-admin td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+  vertical-align: middle;
+}
+
+.pt-table-admin select {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.pt-admin-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pt-signature-canvas {
+  width: 100%;
+  max-width: 400px;
+  height: 150px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  background: var(--bfs-blanc);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+
