@@ -1704,11 +1704,30 @@ async function ptRenderOngletPointage(conteneur) {
   ]);
 
   const horodatagesPrincipaux = S.horodatagesJour.filter((h) => h.type_horodatage in PT_TYPES_HORODATAGE);
-  const horodatagesTrajet = S.horodatagesJour.filter((h) => h.type_horodatage in PT_TYPES_TRAJET);
 
   const prochaine = ptProchaineAction(horodatagesPrincipaux);
   const alerte = ptVerifierAlertePause(horodatagesPrincipaux);
-  const prochainTrajet = ptProchaineActionTrajet(horodatagesTrajet);
+  // Fusion demandée par Jeremy (2026-08-06, section 28 du mémoire) : au tout
+  // premier pointage du jour (aucune arrivée encore enregistrée), le bouton
+  // "Pointer le début de journée" embarque directement la catégorie
+  // d'activité — plus besoin de remplir le pointage puis l'activité
+  // séparément. Les changements d'activité en cours de journée passent
+  // toujours par le formulaire "Activité du jour" habituel.
+  const demarrageJournee = Boolean(prochaine) && prochaine.type === 'arrivee';
+  // Bug corrigé (2026-08-06, section 25 du mémoire) : le bouton trajet
+  // inter-agence doit regarder tout l'historique récent (S.horodatagesTrajetTous,
+  // déjà chargé pour le calcul des séjours), pas seulement les pointages du
+  // jour — sinon un séjour à cheval sur plusieurs jours (départ pointé un
+  // jour précédent, pas encore de retour) fait croire qu'aucun trajet n'est
+  // en cours et propose de repartir au lieu de rentrer.
+  const prochainTrajet = ptProchaineActionTrajet(S.horodatagesTrajetTous);
+  // Libellé du bouton contextualisé (demande Jeremy, 2026-08-06, section 26
+  // du mémoire) : "Pointer le départ (départ/arrivée)" pour un aller,
+  // "Pointer le retour (départ/arrivée)" dès qu'un séjour est en cours —
+  // évite l'ambiguïté du libellé générique "trajet inter-agence" une fois
+  // arrivé à l'autre agence.
+  const enDeplacementInterAgence = ptEnDeplacementInterAgence(S.horodatagesTrajetTous);
+  const labelBoutonTrajet = ptLabelBoutonTrajet(prochainTrajet.type, enDeplacementInterAgence);
   const sejoursInterAgence = S.profil.agence_rattachement
     ? ptCalculerSejoursInterAgence(S.horodatagesTrajetTous)
     : [];
@@ -1724,7 +1743,30 @@ async function ptRenderOngletPointage(conteneur) {
       </ul>
 
       ${prochaine
-        ? `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`
+        ? (demarrageJournee
+            ? `<form id="pt-form-debut-journee" class="pt-form-activite">
+                 <p class="pt-info">Pointage et activité en un seul geste : indique ce sur quoi tu démarres.</p>
+                 <label>Catégorie
+                   <select name="type_activite" id="pt-debut-activite-type">
+                     ${Object.entries(PT_LABELS_ACTIVITE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
+                   </select>
+                 </label>
+                 <label id="pt-debut-activite-formation-champ">Formation
+                   <select name="formation_code">
+                     <option value="">—</option>
+                     ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+                   </select>
+                 </label>
+                 <label>Centre
+                   <select name="centre_code">
+                     <option value="">—</option>
+                     ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
+                   </select>
+                 </label>
+                 <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+                 <button type="submit" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>
+               </form>`
+            : `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`)
         : `<p class="pt-info">Journée déjà bouclée. Utilise la saisie manuelle ci-dessous si besoin d'une correction.</p>`}
 
       <button id="pt-btn-saisie-manuelle" class="pt-btn pt-btn-secondaire pt-btn-petit">Saisir un horodatage manquant</button>
@@ -1735,10 +1777,11 @@ async function ptRenderOngletPointage(conteneur) {
             <option value="pause_debut">Début de pause</option>
             <option value="pause_fin">Fin de pause</option>
             <option value="depart">Départ</option>
-            <option value="trajet_inter_site_debut">Départ trajet inter-agence</option>
-            <option value="trajet_inter_site_fin">Arrivée trajet inter-agence</option>
+            <option value="trajet_inter_site_debut">Départ trajet inter-agence (aller ou retour)</option>
+            <option value="trajet_inter_site_fin">Arrivée trajet inter-agence (aller ou retour)</option>
           </select>
         </label>
+        <label>Date <input type="date" name="date" value="${ptDateDuJour()}" required /></label>
         <label>Heure
           <input type="time" name="heure" required />
         </label>
@@ -1748,8 +1791,9 @@ async function ptRenderOngletPointage(conteneur) {
 
     <section class="pt-carte">
       <h2>Trajet inter-agence</h2>
+      ${enDeplacementInterAgence ? '<span class="pt-badge pt-badge-ok">Déplacement en cours</span>' : ''}
       <p class="pt-info">Trajet entre deux lieux de travail (ex. BFS 85 ↔ BFS 29) : peut se pointer à tout moment, y compris un jour non ouvré. Compte comme temps de travail effectif (règle CCN).</p>
-      <button id="pt-btn-trajet" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochainTrajet.label)}</button>
+      <button id="pt-btn-trajet" class="pt-btn pt-btn-grand">${ptEchapperHtml(labelBoutonTrajet)}</button>
     </section>
 
     <section class="pt-carte">
@@ -1805,18 +1849,51 @@ async function ptRenderOngletPointage(conteneur) {
       </ul>
     </section>`;
 
-  const boutonPointer = document.getElementById('pt-btn-pointer');
-  if (boutonPointer) {
-    boutonPointer.addEventListener('click', async () => {
-      boutonPointer.disabled = true;
+  if (demarrageJournee) {
+    const formDebutJournee = document.getElementById('pt-form-debut-journee');
+    const champTypeDebut = document.getElementById('pt-debut-activite-type');
+    const champFormationDebut = document.getElementById('pt-debut-activite-formation-champ');
+    const majAffichageFormationDebut = () => {
+      champFormationDebut.style.display = champTypeDebut.value === 'acte_formation' ? '' : 'none';
+    };
+    majAffichageFormationDebut();
+    champTypeDebut.addEventListener('change', majAffichageFormationDebut);
+
+    formDebutJournee.addEventListener('submit', async (evenement) => {
+      evenement.preventDefault();
+      const formulaire = new FormData(evenement.target);
+      const boutonSubmit = formDebutJournee.querySelector('button[type="submit"]');
+      boutonSubmit.disabled = true;
       try {
-        await ptEnregistrerHorodatage(prochaine.type);
+        await ptEnregistrerHorodatage('arrivee');
+        await ptAjouterActivite({
+          type_activite: formulaire.get('type_activite'),
+          formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
+          centre_code: formulaire.get('centre_code') || null,
+          heure_debut: new Date().toTimeString().slice(0, 5),
+          heure_fin: null,
+          commentaire: formulaire.get('commentaire') || null,
+        });
         ptRenderOngletPointage(conteneur);
       } catch (erreur) {
-        PT_DEBUG.log(`Échec de l'enregistrement du pointage : ${erreur.message}`, true);
-        boutonPointer.disabled = false;
+        PT_DEBUG.log(`Échec du démarrage de journée : ${erreur.message}`, true);
+        boutonSubmit.disabled = false;
       }
     });
+  } else {
+    const boutonPointer = document.getElementById('pt-btn-pointer');
+    if (boutonPointer) {
+      boutonPointer.addEventListener('click', async () => {
+        boutonPointer.disabled = true;
+        try {
+          await ptEnregistrerHorodatage(prochaine.type);
+          ptRenderOngletPointage(conteneur);
+        } catch (erreur) {
+          PT_DEBUG.log(`Échec de l'enregistrement du pointage : ${erreur.message}`, true);
+          boutonPointer.disabled = false;
+        }
+      });
+    }
   }
 
   document.getElementById('pt-btn-trajet').addEventListener('click', async (evenement) => {
@@ -1855,11 +1932,13 @@ async function ptRenderOngletPointage(conteneur) {
   document.getElementById('pt-form-manuel').addEventListener('submit', async (evenement) => {
     evenement.preventDefault();
     const formulaire = new FormData(evenement.target);
-    const [heures, minutes] = formulaire.get('heure').split(':');
-    const moment = new Date();
-    moment.setHours(Number(heures), Number(minutes), 0, 0);
+    const dateChoisie = formulaire.get('date');
+    // new Date('AAAA-MM-JJTHH:MM:00') est interprété en heure locale (pas de
+    // suffixe "Z"), cohérent avec le reste de l'appli qui raisonne en heure
+    // de Paris (cf. ptDateDuJour).
+    const moment = new Date(`${dateChoisie}T${formulaire.get('heure')}:00`);
     try {
-      await ptEnregistrerHorodatage(formulaire.get('type'), { manuel: true, moment });
+      await ptEnregistrerHorodatage(formulaire.get('type'), { manuel: true, moment, date: dateChoisie });
       ptRenderOngletPointage(conteneur);
     } catch (erreur) {
       PT_DEBUG.log(`Échec de la saisie manuelle : ${erreur.message}`, true);
@@ -1921,6 +2000,27 @@ function ptProchaineActionTrajet(horodatagesTrajet) {
   return { type: config.suivant, label: PT_TYPES_TRAJET[config.suivant].label };
 }
 
+// Un séjour à l'autre agence est en cours dès que le nombre d'arrivées
+// pointées ("trajet_inter_site_fin") est impair : chaque arrivée ouvre un
+// séjour, chaque nouvelle arrivée suivante le referme. Ne dépend pas de
+// l'agence de rattachement (contrairement à ptCalculerSejoursInterAgence) :
+// c'est une simple alternance, symétrique quelle que soit l'agence de
+// départ, donc utilisable même si agence_rattachement n'est pas renseigné.
+function ptEnDeplacementInterAgence(horodatagesTrajetTous) {
+  const nombreArrivees = horodatagesTrajetTous.filter((h) => h.type_horodatage === 'trajet_inter_site_fin').length;
+  return nombreArrivees % 2 === 1;
+}
+
+// Libellé du bouton trajet inter-agence, contextualisé : "départ" pour un
+// aller (pas de séjour en cours), "retour" dès qu'un séjour est en cours —
+// dans les deux cas, précise s'il s'agit de pointer le départ ou l'arrivée
+// de cette étape.
+function ptLabelBoutonTrajet(typeAction, enDeplacementInterAgence) {
+  const phase = enDeplacementInterAgence ? 'retour' : 'départ';
+  const etape = typeAction === 'trajet_inter_site_debut' ? 'départ' : 'arrivée';
+  return `Pointer le ${phase} (${etape})`;
+}
+
 // Calcule les séjours "à l'autre agence" à partir de l'historique des
 // trajets inter-site pointés et de l'agence de rattachement du salarié.
 // Hypothèse (décidée avec Jeremy) : le centre de chaque trajet est déduit
@@ -1980,12 +2080,18 @@ function ptVerifierAlertePause(horodatages) {
   return null;
 }
 
+// "date" par défaut = aujourd'hui, mais surchageable pour rattraper un
+// oubli sur un jour précédent (ex. retour de trajet inter-agence non pointé
+// sur le moment, cf. MEMOIRE_PROJET.md section 27) — avant ce correctif,
+// la ligne était toujours enregistrée avec la date du jour même quand
+// "moment" pointait vers une date passée, ce qui cassait tous les calculs
+// qui filtrent par colonne "date".
 async function ptEnregistrerHorodatage(type, options = {}) {
-  const { manuel = false, moment = new Date() } = options;
+  const { manuel = false, moment = new Date(), date = ptDateDuJour() } = options;
   const geoloc = manuel ? { latitude: null, longitude: null } : await ptCapturerGeoloc();
   const { error } = await ptSupabase.from('horodatages').insert({
     technicien_id: S.session.user.id,
-    date: ptDateDuJour(),
+    date,
     moment: moment.toISOString(),
     type_horodatage: type,
     source: manuel ? 'manuel' : 'bouton',
