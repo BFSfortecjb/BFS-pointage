@@ -1730,7 +1730,6 @@ async function ptRenderOngletPointage(conteneur) {
   conteneur.innerHTML = `<p>Chargement…</p>`;
   await Promise.all([
     ptChargerHorodatagesJour(),
-    ptChargerActivitesJour(),
     ptChargerCentres(),
     ptChargerFormations(),
     ptChargerDeplacementsRecents(),
@@ -1746,9 +1745,10 @@ async function ptRenderOngletPointage(conteneur) {
   // midi, qui peut avoir une activité différente du matin — le bouton
   // embarque directement la catégorie d'activité, pour ne pas remplir le
   // pointage puis l'activité séparément. Ne s'applique pas au début de pause
-  // ni à la fin de journée (rien à démarrer). Un changement d'activité en
-  // cours de bloc (sans repointer) continue de passer par le formulaire
-  // "Activité du jour" habituel.
+  // ni à la fin de journée (rien à démarrer). Le formulaire "Activité du
+  // jour" séparé a été retiré (section 32 du mémoire) : il faisait doublon
+  // dès qu'il n'y avait qu'une seule activité par bloc — la saisie passe
+  // désormais uniquement par ce formulaire fusionné.
   const demarrageBlocTravail = Boolean(prochaine) && (prochaine.type === 'arrivee' || prochaine.type === 'pause_fin');
   // Bug corrigé (2026-08-06, section 25 du mémoire) : le bouton trajet
   // inter-agence doit regarder tout l'historique récent (S.horodatagesTrajetTous,
@@ -1830,36 +1830,6 @@ async function ptRenderOngletPointage(conteneur) {
       ${enDeplacementInterAgence ? '<span class="pt-badge pt-badge-ok">Déplacement en cours</span>' : ''}
       <p class="pt-info">Trajet entre deux lieux de travail (ex. BFS 85 ↔ BFS 29) : peut se pointer à tout moment, y compris un jour non ouvré. Compte comme temps de travail effectif (règle CCN).</p>
       <button id="pt-btn-trajet" class="pt-btn pt-btn-grand">${ptEchapperHtml(labelBoutonTrajet)}</button>
-    </section>
-
-    <section class="pt-carte">
-      <h2>Activité du jour</h2>
-      <ul class="pt-liste-activites">
-        ${S.activitesJour.map((a) => `<li><strong>${PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite}</strong>${a.formation_code ? ` — ${ptEchapperHtml(ptLibelleFormation(a.formation_code))}` : ''}${a.centre_code ? ` — ${ptEchapperHtml(ptLibelleCentre(a.centre_code))}` : ''}${a.heure_debut ? ` — ${a.heure_debut.slice(0, 5)}` : ''}${a.heure_fin ? `–${a.heure_fin.slice(0, 5)}` : ''}${a.commentaire ? ` — ${ptEchapperHtml(a.commentaire)}` : ''}</li>`).join('') || '<li class="pt-liste-vide">Aucune activité renseignée.</li>'}
-      </ul>
-      <form id="pt-form-activite" class="pt-form-activite">
-        <label>Catégorie
-          <select name="type_activite" id="pt-activite-type">
-            ${Object.entries(PT_LABELS_ACTIVITE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
-          </select>
-        </label>
-        <label id="pt-activite-formation-champ">Formation
-          <select name="formation_code">
-            <option value="">—</option>
-            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
-          </select>
-        </label>
-        <label>Centre
-          <select name="centre_code">
-            <option value="">—</option>
-            ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
-          </select>
-        </label>
-        <label>Début <input type="time" name="heure_debut" /></label>
-        <label>Fin <input type="time" name="heure_fin" /></label>
-        <label>Commentaire (détail libre, ex. pour travaux divers) <input type="text" name="commentaire" maxlength="200" /></label>
-        <button type="submit" class="pt-btn pt-btn-petit">Ajouter l'activité</button>
-      </form>
     </section>
 
     <section class="pt-carte">
@@ -1985,31 +1955,6 @@ async function ptRenderOngletPointage(conteneur) {
     }
   });
 
-  const champTypeActivite = document.getElementById('pt-activite-type');
-  const champFormation = document.getElementById('pt-activite-formation-champ');
-  const majAffichageFormation = () => {
-    champFormation.style.display = champTypeActivite.value === 'acte_formation' ? '' : 'none';
-  };
-  majAffichageFormation();
-  champTypeActivite.addEventListener('change', majAffichageFormation);
-
-  document.getElementById('pt-form-activite').addEventListener('submit', async (evenement) => {
-    evenement.preventDefault();
-    const formulaire = new FormData(evenement.target);
-    try {
-      await ptAjouterActivite({
-        type_activite: formulaire.get('type_activite'),
-        formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
-        centre_code: formulaire.get('centre_code') || null,
-        heure_debut: formulaire.get('heure_debut') || null,
-        heure_fin: formulaire.get('heure_fin') || null,
-        commentaire: formulaire.get('commentaire') || null,
-      });
-      ptRenderOngletPointage(conteneur);
-    } catch (erreur) {
-      PT_DEBUG.log(`Échec de l'ajout d'activité : ${erreur.message}`, true);
-    }
-  });
 }
 
 function ptLibelleCentre(code) {
@@ -2152,17 +2097,6 @@ async function ptChargerHorodatagesJour() {
     .order('moment', { ascending: true });
   if (error) throw error;
   S.horodatagesJour = data;
-}
-
-async function ptChargerActivitesJour() {
-  const { data, error } = await ptSupabase
-    .from('activites')
-    .select('*')
-    .eq('technicien_id', S.session.user.id)
-    .eq('date', ptDateDuJour())
-    .order('heure_debut', { ascending: true });
-  if (error) throw error;
-  S.activitesJour = data;
 }
 
 async function ptAjouterActivite(champs) {

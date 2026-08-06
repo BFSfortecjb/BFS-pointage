@@ -19,7 +19,6 @@ const S = {
   parametres: {}, // { cle: valeur } chargé depuis pointage.parametres
   ongletActif: 'pointage',
   horodatagesJour: [],
-  activitesJour: [],
   centres: [],
   formations: [],
   deplacementsRecents: [],
