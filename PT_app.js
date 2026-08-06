@@ -1707,13 +1707,15 @@ async function ptRenderOngletPointage(conteneur) {
 
   const prochaine = ptProchaineAction(horodatagesPrincipaux);
   const alerte = ptVerifierAlertePause(horodatagesPrincipaux);
-  // Fusion demandée par Jeremy (2026-08-06, section 28 du mémoire) : au tout
-  // premier pointage du jour (aucune arrivée encore enregistrée), le bouton
-  // "Pointer le début de journée" embarque directement la catégorie
-  // d'activité — plus besoin de remplir le pointage puis l'activité
-  // séparément. Les changements d'activité en cours de journée passent
-  // toujours par le formulaire "Activité du jour" habituel.
-  const demarrageJournee = Boolean(prochaine) && prochaine.type === 'arrivee';
+  // Fusion demandée par Jeremy (2026-08-06, sections 28/29 du mémoire) : au
+  // début d'un bloc de travail — arrivée du matin OU retour de pause l'après-
+  // midi, qui peut avoir une activité différente du matin — le bouton
+  // embarque directement la catégorie d'activité, pour ne pas remplir le
+  // pointage puis l'activité séparément. Ne s'applique pas au début de pause
+  // ni à la fin de journée (rien à démarrer). Un changement d'activité en
+  // cours de bloc (sans repointer) continue de passer par le formulaire
+  // "Activité du jour" habituel.
+  const demarrageBlocTravail = Boolean(prochaine) && (prochaine.type === 'arrivee' || prochaine.type === 'pause_fin');
   // Bug corrigé (2026-08-06, section 25 du mémoire) : le bouton trajet
   // inter-agence doit regarder tout l'historique récent (S.horodatagesTrajetTous,
   // déjà chargé pour le calcul des séjours), pas seulement les pointages du
@@ -1743,7 +1745,7 @@ async function ptRenderOngletPointage(conteneur) {
       </ul>
 
       ${prochaine
-        ? (demarrageJournee
+        ? (demarrageBlocTravail
             ? `<form id="pt-form-debut-journee" class="pt-form-activite">
                  <p class="pt-info">Pointage et activité en un seul geste : indique ce sur quoi tu démarres.</p>
                  <label>Catégorie
@@ -1849,7 +1851,7 @@ async function ptRenderOngletPointage(conteneur) {
       </ul>
     </section>`;
 
-  if (demarrageJournee) {
+  if (demarrageBlocTravail) {
     const formDebutJournee = document.getElementById('pt-form-debut-journee');
     const champTypeDebut = document.getElementById('pt-debut-activite-type');
     const champFormationDebut = document.getElementById('pt-debut-activite-formation-champ');
