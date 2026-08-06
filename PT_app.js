@@ -494,28 +494,34 @@ function ptElargirPlage(dateDebutIso, dateFinIso) {
   return dates;
 }
 
-async function ptCalculerRecapAnnee(annee) {
+// technicienId par défaut = l'utilisateur connecté (usage technicien, onglet
+// Suivi) ; passé explicitement pour le récap RH admin (n'importe quel
+// salarié, cf. ptRenderAdminRh, section 24 du mémoire).
+async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   const debutAnnee = `${annee}-01-01`;
   const finAnnee = `${annee}-12-31`;
 
-  const [horodatagesRes, deplacementsRes, congesRttRes, trajetsRes] = await Promise.all([
+  const [horodatagesRes, deplacementsRes, congesRes, trajetsRes] = await Promise.all([
     ptSupabase.from('horodatages').select('date, moment, type_horodatage')
-      .eq('technicien_id', S.session.user.id)
+      .eq('technicien_id', technicienId)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
       .gte('date', debutAnnee).lte('date', finAnnee),
     ptSupabase.from('deplacements').select('date_aller, date_retour')
-      .eq('technicien_id', S.session.user.id)
+      .eq('technicien_id', technicienId)
       .gte('date_aller', debutAnnee).lte('date_aller', finAnnee),
-    ptSupabase.from('conges').select('date_debut, date_fin')
-      .eq('technicien_id', S.session.user.id)
-      .eq('type_conge', 'rtt').eq('statut', 'accorde')
+    // Tous types de congés accordés (pas seulement RTT) : nécessaire au
+    // détail "congés pris par type" du récap RH (ticket resto/bulletin de
+    // paie), en plus du calcul RTT dispo qui n'utilise que le sous-type rtt.
+    ptSupabase.from('conges').select('type_conge, date_debut, date_fin')
+      .eq('technicien_id', technicienId)
+      .eq('statut', 'accorde')
       .lte('date_debut', finAnnee).gte('date_fin', debutAnnee),
     ptSupabase.from('horodatages').select('date, moment, type_horodatage')
-      .eq('technicien_id', S.session.user.id)
+      .eq('technicien_id', technicienId)
       .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .order('moment', { ascending: true }),
   ]);
-  for (const res of [horodatagesRes, deplacementsRes, congesRttRes, trajetsRes]) {
+  for (const res of [horodatagesRes, deplacementsRes, congesRes, trajetsRes]) {
     if (res.error) throw res.error;
   }
 
@@ -528,6 +534,12 @@ async function ptCalculerRecapAnnee(annee) {
     const lundi = ptLundiDeLaSemaine(dateIso);
     heuresParSemaine[lundi] = (heuresParSemaine[lundi] || 0) + heures;
   }
+
+  // 1bis. Jours travaillés (au moins une arrivée pointée ce jour-là) — sert
+  // de base au comptage des tickets resto. Règle exacte (journée complète,
+  // exclusion des jours de déplacement...) pas encore tranchée avec Jeremy,
+  // affiché comme un simple décompte de jours pointés pour l'instant.
+  const joursTravaillesSet = new Set(horodatagesRes.data.filter((h) => h.type_horodatage === 'arrivee').map((h) => h.date));
 
   // 2. Jours de déplacement : nuitées manuelles (deplacements) + nuits
   // inter-agence calculées automatiquement, sur l'ensemble de l'historique
@@ -543,14 +555,34 @@ async function ptCalculerRecapAnnee(annee) {
     for (const date of ptElargirPlage(s.dateArrivee, finSejour)) datesDeplacement.add(date);
   }
 
-  // 3. RTT pris (en jours calendaires de congés accordés, puis converti en
-  // heures à titre indicatif).
-  const datesRttPrises = new Set();
-  for (const c of congesRttRes.data) {
-    for (const date of ptElargirPlage(c.date_debut, c.date_fin)) datesRttPrises.add(date);
+  // 2bis. Tickets resto : paramétrable dans Administration > Paramètres
+  // (deux règles indépendantes et cumulables, décidé avec Jeremy) —
+  // ticket_resto_jour_travaille (jour pointé) et ticket_resto_jour_deplacement
+  // (nuit chez un client ou inter-agence). Un jour qui coche les deux cases
+  // ne compte qu'une fois (Set), pas de double ticket le même jour.
+  const ticketsRestoDates = new Set();
+  if (ptParametreActif('ticket_resto_jour_travaille')) {
+    for (const date of joursTravaillesSet) ticketsRestoDates.add(date);
+  }
+  if (ptParametreActif('ticket_resto_jour_deplacement')) {
+    for (const date of datesDeplacement) ticketsRestoDates.add(date);
   }
 
-  // 4. Construction des 12 mois + cumul du solde RTT dispo.
+  // 3. Congés accordés par type : dates -> type_conge (pour le RTT pris, et
+  // pour le détail "congés pris par type" du récap RH). Si deux congés se
+  // chevauchent sur une même date (ne devrait pas arriver), le dernier
+  // rencontré l'emporte — cas non géré finement, pas rencontré en pratique.
+  const datesRttPrises = new Set();
+  const typeCongeParDate = {};
+  for (const c of congesRes.data) {
+    for (const date of ptElargirPlage(c.date_debut, c.date_fin)) {
+      typeCongeParDate[date] = c.type_conge;
+      if (c.type_conge === 'rtt') datesRttPrises.add(date);
+    }
+  }
+
+  // 4. Construction des 12 mois + cumul du solde RTT dispo + congés par
+  // type + jours travaillés.
   const mois = [];
   let cumulAccumule = 0;
   let cumulPris = 0;
@@ -576,10 +608,17 @@ async function ptCalculerRecapAnnee(annee) {
 
     let joursDeplacementMois = 0;
     let rttPrisJoursMois = 0;
+    let joursTravaillesMois = 0;
+    let ticketsRestoMois = 0;
+    const congesParTypeMois = {};
     for (let jour = 1; jour <= dernierJourMois.getDate(); jour += 1) {
       const dateIso = new Date(annee, m, jour).toLocaleDateString('sv-SE');
       if (datesDeplacement.has(dateIso)) joursDeplacementMois += 1;
       if (datesRttPrises.has(dateIso)) rttPrisJoursMois += 1;
+      if (joursTravaillesSet.has(dateIso)) joursTravaillesMois += 1;
+      if (ticketsRestoDates.has(dateIso)) ticketsRestoMois += 1;
+      const typeConge = typeCongeParDate[dateIso];
+      if (typeConge) congesParTypeMois[typeConge] = (congesParTypeMois[typeConge] || 0) + 1;
     }
 
     cumulAccumule += rttAccumuleMois;
@@ -591,6 +630,9 @@ async function ptCalculerRecapAnnee(annee) {
       joursDeplacement: joursDeplacementMois,
       rttPrisJours: rttPrisJoursMois,
       rttDispoHeures: cumulAccumule - cumulPris,
+      joursTravailles: joursTravaillesMois,
+      ticketsResto: ticketsRestoMois,
+      congesParType: congesParTypeMois,
     });
   }
 
@@ -599,7 +641,17 @@ async function ptCalculerRecapAnnee(annee) {
     joursDeplacement: acc.joursDeplacement + m.joursDeplacement,
     rttPrisJours: acc.rttPrisJours + m.rttPrisJours,
     rttDispoHeures: mois[mois.length - 1].rttDispoHeures,
-  }), { heures: 0, joursDeplacement: 0, rttPrisJours: 0, rttDispoHeures: 0 });
+    joursTravailles: acc.joursTravailles + m.joursTravailles,
+    ticketsResto: acc.ticketsResto + m.ticketsResto,
+  }), { heures: 0, joursDeplacement: 0, rttPrisJours: 0, rttDispoHeures: 0, joursTravailles: 0, ticketsResto: 0 });
+
+  // Total des congés par type sur l'année entière (toutes dates confondues,
+  // pas seulement celles qui tombent dans un mois du récap ci-dessus).
+  const congesParTypeTotal = {};
+  for (const type of Object.values(typeCongeParDate)) {
+    congesParTypeTotal[type] = (congesParTypeTotal[type] || 0) + 1;
+  }
+  total.congesParType = congesParTypeTotal;
 
   return { mois, total };
 }
@@ -927,6 +979,8 @@ const PT_LABELS_PARAMETRE = {
   trajet_compte_heures_conducteur: 'Trajet compté en heures — conducteur véhicule de service',
   trajet_compte_heures_passager: 'Trajet compté en heures — passager',
   trajet_compte_heures_vehicule_perso: 'Trajet compté en heures — véhicule personnel',
+  ticket_resto_jour_travaille: 'Ticket resto — jour travaillé',
+  ticket_resto_jour_deplacement: 'Ticket resto — jour de déplacement',
 };
 
 async function ptRenderOngletAdmin(conteneur) {
@@ -936,6 +990,7 @@ async function ptRenderOngletAdmin(conteneur) {
     { id: 'conges', label: 'Congés' },
     { id: 'profils', label: 'Profils' },
     { id: 'parametres', label: 'Paramètres' },
+    { id: 'rh', label: 'Récap RH' },
   ];
 
   conteneur.innerHTML = `
@@ -959,6 +1014,7 @@ async function ptRenderOngletAdmin(conteneur) {
     conges: ptRenderAdminConges,
     profils: ptRenderAdminProfils,
     parametres: ptRenderAdminParametres,
+    rh: ptRenderAdminRh,
   };
   await (rendusAdmin[S.adminVue] || ptRenderAdminConges)(zoneContenu, conteneur);
 }
@@ -1156,6 +1212,176 @@ async function ptRenderAdminParametres(zoneContenu, conteneur) {
 async function ptModifierParametre(cle, valeur) {
   const { error } = await ptSupabase.from('parametres').update({ valeur, updated_at: new Date().toISOString() }).eq('cle', cle);
   if (error) throw error;
+}
+
+// --- Récap RH : par salarié, base de préparation des bulletins de paie
+// (heures, RTT, jours travaillés, tickets resto, congés pris par type).
+// Réutilise ptCalculerRecapAnnee (partagé avec l'onglet Suivi du
+// technicien), paramétré sur le technicien choisi plutôt que l'utilisateur
+// connecté. Demande de Jeremy (2026-08-06) : l'admin doit pouvoir gérer
+// l'aspect RH (bulletins de paie, retrait congé, ticket resto), pas
+// seulement l'administratif applicatif.
+async function ptRenderAdminRh(zoneContenu, conteneur) {
+  zoneContenu.innerHTML = `<p>Chargement…</p>`;
+  const { data: profils, error } = await ptSupabase.from('profils').select('id, nom, prenom').order('nom');
+  if (error) throw error;
+  if (!profils.length) {
+    zoneContenu.innerHTML = '<p class="pt-liste-vide">Aucun salarié.</p>';
+    return;
+  }
+  if (!S.adminRhTechnicienId) S.adminRhTechnicienId = profils[0].id;
+
+  zoneContenu.innerHTML = `
+    <label>Salarié
+      <select id="pt-rh-select-technicien">
+        ${profils.map((p) => `<option value="${p.id}" ${p.id === S.adminRhTechnicienId ? 'selected' : ''}>${ptEchapperHtml(p.prenom)} ${ptEchapperHtml(p.nom)}</option>`).join('')}
+      </select>
+    </label>
+    <div id="pt-rh-recap"></div>`;
+
+  document.getElementById('pt-rh-select-technicien').addEventListener('change', (evenement) => {
+    S.adminRhTechnicienId = evenement.target.value;
+    ptRenderAdminRh(zoneContenu, conteneur);
+  });
+
+  const technicien = profils.find((p) => p.id === S.adminRhTechnicienId);
+  await ptAfficherRecapRh(document.getElementById('pt-rh-recap'), zoneContenu, conteneur, technicien);
+}
+
+async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) {
+  zoneRecap.innerHTML = `<p>Calcul en cours…</p>`;
+  const recap = await ptCalculerRecapAnnee(S.adminRhAnnee, S.adminRhTechnicienId);
+  const nomPrenom = `${technicien.prenom} ${technicien.nom}`;
+
+  zoneRecap.innerHTML = `
+    <div class="pt-suivi-annee-nav">
+      <button id="pt-rh-annee-prec" class="pt-btn pt-btn-secondaire pt-btn-petit">« ${S.adminRhAnnee - 1}</button>
+      <strong>${S.adminRhAnnee}</strong>
+      <button id="pt-rh-annee-suiv" class="pt-btn pt-btn-secondaire pt-btn-petit">${S.adminRhAnnee + 1} »</button>
+    </div>
+    <div class="pt-admin-actions">
+      <button id="pt-rh-btn-pdf" class="pt-btn pt-btn-secondaire pt-btn-petit">Exporter PDF</button>
+      <button id="pt-rh-btn-excel" class="pt-btn pt-btn-secondaire pt-btn-petit">Exporter Excel</button>
+    </div>
+    <p class="pt-info">Base de préparation des bulletins de paie : heures, RTT, jours de déplacement, jours travaillés, tickets resto (règle paramétrable dans Paramètres) et congés pris par type.</p>
+    <table class="pt-table-recap">
+      <thead>
+        <tr><th>Mois</th><th>Heures</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th>Jours trav.</th><th>Tickets resto</th></tr>
+      </thead>
+      <tbody>
+        ${recap.mois.map((m) => `
+          <tr>
+            <td>${m.label}</td>
+            <td>${m.heures.toFixed(2).replace('.', ',')}</td>
+            <td>${m.joursDeplacement}</td>
+            <td>${m.rttPrisJours}</td>
+            <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
+            <td>${m.joursTravailles}</td>
+            <td>${m.ticketsResto}</td>
+          </tr>`).join('')}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td><strong>Total</strong></td>
+          <td><strong>${recap.total.heures.toFixed(2).replace('.', ',')}</strong></td>
+          <td><strong>${recap.total.joursDeplacement}</strong></td>
+          <td><strong>${recap.total.rttPrisJours}</strong></td>
+          <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
+          <td><strong>${recap.total.joursTravailles}</strong></td>
+          <td><strong>${recap.total.ticketsResto}</strong></td>
+        </tr>
+      </tfoot>
+    </table>
+
+    <h3 class="pt-recap-mois-titre">Congés pris par type (année ${S.adminRhAnnee})</h3>
+    <table class="pt-table-admin">
+      <thead><tr><th>Type</th><th>Jours</th></tr></thead>
+      <tbody>
+        ${Object.entries(PT_LABELS_CONGE).map(([type, label]) => `
+          <tr><td>${label}</td><td>${recap.total.congesParType[type] || 0}</td></tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  document.getElementById('pt-rh-annee-prec').addEventListener('click', () => {
+    S.adminRhAnnee -= 1;
+    ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien);
+  });
+  document.getElementById('pt-rh-annee-suiv').addEventListener('click', () => {
+    S.adminRhAnnee += 1;
+    ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien);
+  });
+  document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee));
+  document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee));
+}
+
+function ptExporterRecapRhPdf(recap, nomPrenom, annee) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(`Récap RH ${annee} — ${nomPrenom}`, 14, 16);
+  doc.autoTable({
+    startY: 24,
+    head: [['Mois', 'Heures', 'Jours dépl.', 'RTT pris (j)', 'RTT dispo (h)', 'Jours trav.', 'Tickets resto']],
+    body: recap.mois.map((m) => [
+      m.label,
+      m.heures.toFixed(2).replace('.', ','),
+      String(m.joursDeplacement),
+      String(m.rttPrisJours),
+      m.rttDispoHeures.toFixed(2).replace('.', ','),
+      String(m.joursTravailles),
+      String(m.ticketsResto),
+    ]),
+    foot: [[
+      'Total',
+      recap.total.heures.toFixed(2).replace('.', ','),
+      String(recap.total.joursDeplacement),
+      String(recap.total.rttPrisJours),
+      recap.total.rttDispoHeures.toFixed(2).replace('.', ','),
+      String(recap.total.joursTravailles),
+      String(recap.total.ticketsResto),
+    ]],
+    styles: { fontSize: 8 },
+  });
+  const yApresTableau = doc.lastAutoTable.finalY + 10;
+  doc.setFontSize(11);
+  doc.text('Congés pris par type :', 14, yApresTableau);
+  doc.autoTable({
+    startY: yApresTableau + 4,
+    head: [['Type', 'Jours']],
+    body: Object.entries(PT_LABELS_CONGE).map(([type, label]) => [label, String(recap.total.congesParType[type] || 0)]),
+    styles: { fontSize: 9 },
+  });
+  doc.save(`recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.pdf`);
+}
+
+function ptExporterRecapRhExcel(recap, nomPrenom, annee) {
+  const lignesMois = recap.mois.map((m) => ({
+    Mois: m.label,
+    Heures: Number(m.heures.toFixed(2)),
+    'Jours déplacement': m.joursDeplacement,
+    'RTT pris (j)': m.rttPrisJours,
+    'RTT dispo (h)': Number(m.rttDispoHeures.toFixed(2)),
+    'Jours travaillés': m.joursTravailles,
+    'Tickets resto': m.ticketsResto,
+  }));
+  lignesMois.push({
+    Mois: 'Total',
+    Heures: Number(recap.total.heures.toFixed(2)),
+    'Jours déplacement': recap.total.joursDeplacement,
+    'RTT pris (j)': recap.total.rttPrisJours,
+    'RTT dispo (h)': Number(recap.total.rttDispoHeures.toFixed(2)),
+    'Jours travaillés': recap.total.joursTravailles,
+    'Tickets resto': recap.total.ticketsResto,
+  });
+  const lignesConges = Object.entries(PT_LABELS_CONGE).map(([type, label]) => ({
+    Type: label,
+    Jours: recap.total.congesParType[type] || 0,
+  }));
+
+  const classeur = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesMois), 'Récap mensuel');
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesConges), 'Congés par type');
+  XLSX.writeFile(classeur, `recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.xlsx`);
 }
 
 // --- Onglet Secrétariat : congés/déplacements/frais pour tous les
