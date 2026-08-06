@@ -1867,7 +1867,11 @@ async function ptRenderOngletPointage(conteneur) {
       const boutonSubmit = formDebutJournee.querySelector('button[type="submit"]');
       boutonSubmit.disabled = true;
       try {
-        await ptEnregistrerHorodatage('arrivee');
+        // Bug corrigé (2026-08-06, section 30 du mémoire) : type codé en dur
+        // à 'arrivee' au lieu de prochaine.type — cassait le retour de pause
+        // (qui doit enregistrer 'pause_fin'), provoquant une boucle
+        // arrivée/début de pause sans fin.
+        await ptEnregistrerHorodatage(prochaine.type);
         await ptAjouterActivite({
           type_activite: formulaire.get('type_activite'),
           formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
