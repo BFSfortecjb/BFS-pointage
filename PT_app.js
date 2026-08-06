@@ -8,8 +8,8 @@
 
 const PT_TYPES_HORODATAGE = {
   arrivee: { suivant: 'pause_debut', label: 'Pointer le début de journée' },
-  pause_debut: { suivant: 'pause_fin', label: 'Pointer le début de pause' },
-  pause_fin: { suivant: 'depart', label: 'Pointer la fin de pause' },
+  pause_debut: { suivant: 'pause_fin', label: 'Pointer le début de la pause méridienne' },
+  pause_fin: { suivant: 'depart', label: 'Pointer la fin de la pause méridienne' },
   depart: { suivant: null, label: 'Pointer la fin de journée' },
 };
 
@@ -24,8 +24,8 @@ const PT_TYPES_TRAJET = {
 
 const PT_LABELS_HORODATAGE = {
   arrivee: 'Arrivée',
-  pause_debut: 'Début de pause',
-  pause_fin: 'Fin de pause',
+  pause_debut: 'Début de pause méridienne',
+  pause_fin: 'Fin de pause méridienne',
   depart: 'Départ',
   trajet_inter_site_debut: 'Départ trajet inter-agence',
   trajet_inter_site_fin: 'Arrivée trajet inter-agence',
@@ -271,7 +271,11 @@ async function ptRenderOngletSuivi(conteneur) {
 }
 
 async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
-  await ptChargerHistoriqueSuivi(S.suiviNbJours);
+  // ptChargerCentres/ptChargerFormations nécessaires pour résoudre les
+  // libellés (ptLibelleFormation/ptLibelleCentre) dans le détail matin/
+  // après-midi ci-dessous — pas systématiquement chargés si on arrive
+  // directement sur l'onglet Suivi sans passer par Pointage avant.
+  await Promise.all([ptChargerHistoriqueSuivi(S.suiviNbJours), ptChargerCentres(), ptChargerFormations()]);
   const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours);
 
   zoneContenu.innerHTML = `
@@ -290,9 +294,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
           ${j.horodatages.length > 0
             ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
             : ''}
-          ${j.activites.length > 0
-            ? `<div class="pt-jour-suivi-details">Activités : ${j.activites.map((a) => PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite).join(', ')}</div>`
-            : ''}
+          ${ptRenderActivitesMatinApresMidi(j)}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
@@ -301,6 +303,38 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
     S.suiviNbJours += 14;
     ptRenderSuiviJourParJour(zoneContenu, conteneur);
   });
+}
+
+// Sépare les activités du jour en Matin / Après-midi (demande Jeremy,
+// 2026-08-06, section 31 du mémoire) — seuil = heure de début de la pause
+// méridienne pointée ce jour-là si elle existe, sinon 13h00 par défaut.
+// Chaque activité affichée avec son heure de début quand elle est connue
+// (renseignée automatiquement par le formulaire fusionné, section 28/29 —
+// les activités plus anciennes sans heure_debut apparaissent sans horaire).
+function ptRenderActivitesMatinApresMidi(jour) {
+  if (jour.activites.length === 0) return '';
+
+  const pauseDebut = jour.horodatages.find((h) => h.type_horodatage === 'pause_debut');
+  const seuil = pauseDebut ? ptFormatHeure(pauseDebut.moment) : '13:00';
+
+  const activitesTriees = [...jour.activites].sort((a, b) => (a.heure_debut || '').localeCompare(b.heure_debut || ''));
+  const matin = activitesTriees.filter((a) => !a.heure_debut || a.heure_debut.slice(0, 5) <= seuil);
+  const apresMidi = activitesTriees.filter((a) => a.heure_debut && a.heure_debut.slice(0, 5) > seuil);
+
+  const ligneActivite = (a) => {
+    const heure = a.heure_debut ? `${a.heure_debut.slice(0, 5)} — ` : '';
+    const categorie = PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite;
+    const detail = a.formation_code
+      ? ` (${ptEchapperHtml(ptLibelleFormation(a.formation_code))})`
+      : a.centre_code ? ` (${ptEchapperHtml(ptLibelleCentre(a.centre_code))})` : '';
+    return `${heure}${categorie}${detail}`;
+  };
+
+  return `
+    <div class="pt-jour-suivi-details">
+      ${matin.length > 0 ? `<div><strong>Matin :</strong> ${matin.map(ligneActivite).join(' · ')}</div>` : ''}
+      ${apresMidi.length > 0 ? `<div><strong>Après-midi :</strong> ${apresMidi.map(ligneActivite).join(' · ')}</div>` : ''}
+    </div>`;
 }
 
 const PT_LABELS_MOIS = [
@@ -425,7 +459,7 @@ async function ptChargerHistoriqueSuivi(nbJours) {
       .order('moment', { ascending: true }),
     ptSupabase
       .from('activites')
-      .select('date, type_activite')
+      .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire')
       .eq('technicien_id', S.session.user.id)
       .gte('date', dateDebutIso),
   ]);
@@ -1776,8 +1810,8 @@ async function ptRenderOngletPointage(conteneur) {
         <label>Type
           <select name="type">
             <option value="arrivee">Arrivée</option>
-            <option value="pause_debut">Début de pause</option>
-            <option value="pause_fin">Fin de pause</option>
+            <option value="pause_debut">Début de pause méridienne</option>
+            <option value="pause_fin">Fin de pause méridienne</option>
             <option value="depart">Départ</option>
             <option value="trajet_inter_site_debut">Départ trajet inter-agence (aller ou retour)</option>
             <option value="trajet_inter_site_fin">Arrivée trajet inter-agence (aller ou retour)</option>
@@ -2081,7 +2115,7 @@ function ptVerifierAlertePause(horodatages) {
   const debutTrancheEnCours = dernierDepartPause ? new Date(dernierDepartPause.moment) : new Date(arrivee.moment);
   const heuresEcoulees = (Date.now() - debutTrancheEnCours.getTime()) / 3_600_000;
   if (heuresEcoulees > 6) {
-    return `Plus de 6h sans pause détectées (règle conventionnelle). Pense à pointer une pause.`;
+    return `Plus de 6h sans pause détectées (règle conventionnelle). Pense à pointer la pause méridienne.`;
   }
   return null;
 }
