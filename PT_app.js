@@ -63,6 +63,14 @@ const PT_REGIME_DE = {
   moyenneHebdoAf: 25.2,    // moyenne hebdomadaire d'acte de formation
 };
 
+// Règle BFS (Jeremy, 2026-08-25) : un déplacement va au maximum du dimanche
+// après-midi au vendredi soir. Un séjour ne doit donc jamais dépasser cinq
+// nuits (dimanche, lundi, mardi, mercredi, jeudi) ni comporter de nuit de
+// samedi. Un séjour qui déborde signale presque toujours un retour non
+// pointé — et il gonfle silencieusement les jours de déplacement et les
+// tickets resto du récap RH, d'où l'alerte.
+const PT_DEPLACEMENT_MAX_NUITS = 5;
+
 function ptEchapperHtml(texte) {
   const div = document.createElement('div');
   div.textContent = texte ?? '';
@@ -820,7 +828,9 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
       .eq('technicien_id', technicienId)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
       .gte('date', debutAnnee).lte('date', finAnnee),
-    ptSupabase.from('deplacements').select('date_aller, date_retour')
+    // nuitees_* et commentaire servent au regroupement en séjours, nécessaire
+    // au contrôle de la règle dimanche-vendredi (ptSejoursAnormaux).
+    ptSupabase.from('deplacements').select('date_aller, date_retour, nuitees_avec_petit_dej, nuitees_sans_petit_dej, commentaire')
       .eq('technicien_id', technicienId)
       .gte('date_aller', debutAnnee).lte('date_aller', finAnnee),
     // Tous types de congés accordés (pas seulement RTT) : nécessaire au
@@ -1006,7 +1016,68 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   total.heuresParCategorie = heuresParCategorieTotal;
   total.heuresNonVentilees = heuresNonVentileesTotal;
 
-  return { mois, total, regimeDe: ptIndicateursRegimeDe(total) };
+  // Séjours qui débordent la règle « dimanche après-midi -> vendredi soir ».
+  // Calculés ici pour que le récap RH et le récap du salarié affichent la
+  // même alerte, à partir exactement des séjours qui alimentent les
+  // colonnes "jours de déplacement" et "tickets resto" ci-dessus.
+  const sejoursAnormaux = ptSejoursAnormaux(
+    ptRegrouperSejoursClient(deplacementsRes.data),
+    sejours,
+    annee,
+  );
+
+  return { mois, total, regimeDe: ptIndicateursRegimeDe(total), sejoursAnormaux };
+}
+
+// --- Contrôle des séjours (règle dimanche après-midi -> vendredi soir) ---
+// Les nuits d'un séjour vont de la date d'aller à la veille du retour. Pour
+// un séjour encore ouvert, on compte jusqu'à aujourd'hui : c'est exactement
+// ce que fait le récap, donc l'alerte reflète le chiffre réellement compté.
+function ptNuitsDuSejour(sejour) {
+  const finNuits = sejour.dateRetour ? ptJourPrecedent(sejour.dateRetour) : ptDateDuJour();
+  if (finNuits < sejour.dateAller) return [];
+  return ptElargirPlage(sejour.dateAller, finNuits);
+}
+
+function ptAnomaliesSejour(sejour) {
+  const anomalies = [];
+  const nuits = ptNuitsDuSejour(sejour);
+  if (!sejour.dateRetour) anomalies.push('retour non pointé');
+  if (nuits.length > PT_DEPLACEMENT_MAX_NUITS) {
+    anomalies.push(`${nuits.length} nuits comptées, maximum ${PT_DEPLACEMENT_MAX_NUITS}`);
+  }
+  const samedis = nuits.filter((date) => new Date(`${date}T00:00:00`).getDay() === 6);
+  if (samedis.length) {
+    anomalies.push(`${samedis.length} nuit(s) de samedi, hors règle dimanche-vendredi`);
+  }
+  return anomalies;
+}
+
+// Séjours anormaux d'une année, tous types confondus. Renvoie une liste
+// prête à afficher : type, dates, nuits comptées et motifs.
+function ptSejoursAnormaux(sejoursClient, sejoursInterAgence, annee) {
+  const tous = [
+    ...sejoursClient.map((s) => ({ type: 'client', dateAller: s.dateAller, dateRetour: s.dateRetour })),
+    ...sejoursInterAgence.map((s) => ({ type: 'inter_agence', dateAller: s.dateArrivee, dateRetour: s.dateDepart })),
+  ];
+  return tous
+    .filter((s) => new Date(`${s.dateAller}T00:00:00`).getFullYear() === annee)
+    .map((s) => ({ ...s, nuits: ptNuitsDuSejour(s).length, anomalies: ptAnomaliesSejour(s) }))
+    .filter((s) => s.anomalies.length > 0)
+    .sort((a, b) => b.dateAller.localeCompare(a.dateAller));
+}
+
+// Bloc d'alerte partagé par le Récap RH admin et l'onglet Suivi du salarié.
+function ptRenderAlerteSejoursHtml(sejoursAnormaux, ouCorriger) {
+  if (!sejoursAnormaux.length) return '';
+  return `
+    <div class="pt-alerte">
+      <strong>${sejoursAnormaux.length} déplacement(s) hors règle</strong> — un déplacement va au maximum du dimanche après-midi au vendredi soir (${PT_DEPLACEMENT_MAX_NUITS} nuits). Les jours de déplacement et les tickets resto ci-dessous sont donc surévalués. ${ptEchapperHtml(ouCorriger)}
+      <ul>
+        ${sejoursAnormaux.map((s) => `
+          <li>${s.type === 'inter_agence' ? 'Inter-agence' : 'Client'} — du ${s.dateAller} au ${s.dateRetour || 'aujourd\'hui'} : ${s.nuits} nuit(s) — ${ptEchapperHtml(s.anomalies.join(' ; '))}</li>`).join('')}
+      </ul>
+    </div>`;
 }
 
 function ptJourPrecedent(dateIso) {
@@ -1029,13 +1100,14 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
   const finAnnee = `${annee}-12-31`;
 
   const [deplacementsRes, trajetsRes] = await Promise.all([
-    ptSupabase.from('deplacements').select('date_aller, date_retour, nuitees_avec_petit_dej, nuitees_sans_petit_dej, commentaire')
+    // id demandé : nécessaire aux boutons de correction/suppression.
+    ptSupabase.from('deplacements').select('id, date_aller, date_retour, nuitees_avec_petit_dej, nuitees_sans_petit_dej, commentaire')
       .eq('technicien_id', S.session.user.id)
       .gte('date_aller', `${annee}-01-01`).lte('date_aller', finAnnee)
       .order('date_aller', { ascending: true }),
     // Historique complet (pas seulement l'année) : nécessaire pour que la
     // parité maison/away de ptCalculerSejoursInterAgence reste correcte.
-    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+    ptSupabase.from('horodatages').select('id, date, moment, type_horodatage')
       .eq('technicien_id', S.session.user.id)
       .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .lte('date', finAnnee)
@@ -1045,10 +1117,13 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
   if (trajetsRes.error) throw trajetsRes.error;
 
   const voyagesClient = ptRegrouperSejoursClient(deplacementsRes.data);
-  const voyagesInterAgence = ptCalculerSejoursInterAgence(trajetsRes.data)
+  const sejoursInterAgence = ptCalculerSejoursInterAgence(trajetsRes.data);
+  const voyagesInterAgence = sejoursInterAgence
     .filter((s) => new Date(s.dateArrivee).getFullYear() === annee)
     .map((s) => ({
       type: 'inter_agence',
+      idArrivee: s.idArrivee,
+      idDepart: s.idDepart,
       dateAller: s.dateArrivee,
       dateRetour: s.dateDepart,
       nuits: s.nuits,
@@ -1057,8 +1132,17 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
       commentaire: s.dateDepart ? '' : 'En cours',
     }));
 
+  const sejoursAnormaux = ptSejoursAnormaux(voyagesClient, sejoursInterAgence, annee);
+
   const tousLesVoyages = [...voyagesClient, ...voyagesInterAgence]
     .sort((a, b) => a.dateAller.localeCompare(b.dateAller));
+
+  // Clé stable pour retrouver le voyage depuis un bouton, et contrôle de la
+  // règle dimanche-vendredi ligne par ligne.
+  tousLesVoyages.forEach((voyage, index) => {
+    voyage.cle = String(index);
+    voyage.anomalies = ptAnomaliesSejour(voyage);
+  });
 
   const parMois = {};
   for (const v of tousLesVoyages) {
@@ -1072,36 +1156,202 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
       <strong>${annee}</strong>
       <button id="pt-annee-suiv" class="pt-btn pt-btn-secondaire pt-btn-petit">${annee + 1} »</button>
     </div>
+    ${ptRenderAlerteSejoursHtml(sejoursAnormaux, 'Corrige-les avec les boutons de la colonne Action ci-dessous.')}
+    <p id="pt-deplacement-erreur" class="pt-message-erreur" hidden></p>
     ${PT_LABELS_MOIS.map((label, m) => {
       const voyagesMois = parMois[m];
       if (!voyagesMois) return '';
       return `
         <h3 class="pt-recap-mois-titre">${label}</h3>
+        <div class="pt-table-scroll">
         <table class="pt-table-recap">
-          <thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Nuitées</th><th>Avec p-déj</th><th>Sans p-déj</th><th>Commentaire</th></tr></thead>
+          <thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Nuitées</th><th>Avec p-déj</th><th>Sans p-déj</th><th>Commentaire</th><th>Action</th></tr></thead>
           <tbody>
             ${voyagesMois.map((v) => `
-              <tr>
+              <tr${v.anomalies.length ? ' class="pt-ligne-anomalie"' : ''}>
                 <td>${v.type === 'inter_agence' ? 'Inter-agence' : 'Client'}</td>
                 <td>${v.dateAller}</td>
                 <td>${v.dateRetour || 'en cours'}</td>
-                <td>${v.nuits}</td>
+                <td>${v.nuits}${v.anomalies.length ? ' <span class="pt-badge pt-badge-alerte" title="' + ptEchapperHtml(v.anomalies.join(' ; ')) + '">!</span>' : ''}</td>
                 <td>${v.nuiteesAvecPetitDej ?? '—'}</td>
                 <td>${v.nuiteesSansPetitDej ?? '—'}</td>
                 <td>${ptEchapperHtml(v.commentaire || '')}</td>
+                <td class="pt-deplacement-actions">${ptActionsVoyageHtml(v)}</td>
               </tr>`).join('')}
           </tbody>
-        </table>`;
-    }).join('') || '<p class="pt-liste-vide">Aucun déplacement sur cette année.</p>'}`;
+        </table>
+        </div>`;
+    }).join('') || '<p class="pt-liste-vide">Aucun déplacement sur cette année.</p>'}
+
+    <form id="pt-form-retour-trajet" hidden class="pt-form-activite">
+      <h3 class="pt-recap-mois-titre" id="pt-form-retour-titre"></h3>
+      <label>Date du retour <input type="date" name="date" required /></label>
+      <label>Heure de départ de l'autre agence <input type="time" name="heure_depart" required /></label>
+      <label>Heure d'arrivée <input type="time" name="heure_arrivee" required /></label>
+      <div class="pt-admin-actions">
+        <button type="submit" class="pt-btn pt-btn-petit">Enregistrer</button>
+        <button type="button" id="pt-form-retour-annuler" class="pt-btn pt-btn-secondaire pt-btn-petit">Annuler</button>
+      </div>
+    </form>`;
+
+  const erreurEl = document.getElementById('pt-deplacement-erreur');
+  const signalerErreur = (message, erreur) => {
+    erreurEl.textContent = message;
+    erreurEl.hidden = false;
+    PT_DEBUG.log(`${message} : ${erreur.message}`, true);
+  };
+  const recharger = () => ptRenderDeplacementsRecap(zoneContenu, conteneur);
+  const voyageParCle = (cle) => tousLesVoyages.find((v) => v.cle === cle);
 
   document.getElementById('pt-annee-prec').addEventListener('click', () => {
     S.suiviAnnee -= 1;
-    ptRenderDeplacementsRecap(zoneContenu, conteneur);
+    recharger();
   });
   document.getElementById('pt-annee-suiv').addEventListener('click', () => {
     S.suiviAnnee += 1;
-    ptRenderDeplacementsRecap(zoneContenu, conteneur);
+    recharger();
   });
+
+  // --- Suppression -------------------------------------------------------
+  // Séjour client : on supprime les lignes deplacements qui le composent.
+  // Séjour inter-agence EN COURS : on supprime le seul horodatage d'arrivée
+  // qui l'a ouvert — la parité maison/away reste équilibrée. Un séjour déjà
+  // clos ne se supprime pas (il faudrait retirer les quatre horodatages du
+  // aller-retour sans casser la parité des séjours suivants) : on corrige
+  // sa date de retour à la place.
+  zoneContenu.querySelectorAll('.pt-voyage-supprimer').forEach((bouton) => {
+    bouton.addEventListener('click', async () => {
+      const voyage = voyageParCle(bouton.dataset.cle);
+      if (!voyage) return;
+      bouton.disabled = true;
+      try {
+        if (voyage.type === 'client') {
+          await ptSupprimerSejourClient(voyage.ids);
+        } else {
+          await ptSupprimerOuvertureSejourInterAgence(voyage.idArrivee);
+        }
+        recharger();
+      } catch (erreur) {
+        signalerErreur('Échec de la suppression du déplacement.', erreur);
+        bouton.disabled = false;
+      }
+    });
+  });
+
+  // --- Clôture d'un séjour en cours / correction d'une date de retour ----
+  const formRetour = document.getElementById('pt-form-retour-trajet');
+  const titreRetour = document.getElementById('pt-form-retour-titre');
+  let voyageEnCoursDeCorrection = null;
+
+  zoneContenu.querySelectorAll('.pt-voyage-retour').forEach((bouton) => {
+    bouton.addEventListener('click', () => {
+      const voyage = voyageParCle(bouton.dataset.cle);
+      if (!voyage) return;
+      voyageEnCoursDeCorrection = voyage;
+      titreRetour.textContent = voyage.dateRetour
+        ? `Corriger le retour du séjour commencé le ${voyage.dateAller}`
+        : `Clôturer le séjour commencé le ${voyage.dateAller}`;
+      formRetour.reset();
+      // Valeur de départ : le vendredi de la semaine du départ, conforme à
+      // la règle dimanche après-midi -> vendredi soir.
+      formRetour.elements.date.value = voyage.dateRetour || ptVendrediDeLaSemaine(voyage.dateAller);
+      formRetour.elements.heure_depart.value = '17:00';
+      formRetour.elements.heure_arrivee.value = '19:00';
+      formRetour.hidden = false;
+      formRetour.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  });
+
+  document.getElementById('pt-form-retour-annuler').addEventListener('click', () => {
+    formRetour.hidden = true;
+    voyageEnCoursDeCorrection = null;
+  });
+
+  formRetour.addEventListener('submit', async (evenement) => {
+    evenement.preventDefault();
+    if (!voyageEnCoursDeCorrection) return;
+    const champs = new FormData(evenement.target);
+    const dateRetour = champs.get('date');
+    const momentDepart = new Date(`${dateRetour}T${champs.get('heure_depart')}:00`);
+    const momentArrivee = new Date(`${dateRetour}T${champs.get('heure_arrivee')}:00`);
+    if (momentArrivee <= momentDepart) {
+      signalerErreur('L\'heure d\'arrivée doit être postérieure à l\'heure de départ.', new Error('ordre des heures'));
+      return;
+    }
+    const boutonSubmit = formRetour.querySelector('button[type="submit"]');
+    boutonSubmit.disabled = true;
+    try {
+      if (voyageEnCoursDeCorrection.dateRetour) {
+        await ptCorrigerRetourInterAgence(voyageEnCoursDeCorrection.idDepart, dateRetour, momentDepart);
+      } else {
+        await ptCloturerSejourInterAgence(dateRetour, momentDepart, momentArrivee);
+      }
+      recharger();
+    } catch (erreur) {
+      signalerErreur('Échec de l\'enregistrement du retour.', erreur);
+      boutonSubmit.disabled = false;
+    }
+  });
+}
+
+// Boutons proposés selon le type de séjour et son état. Un séjour dont on ne
+// connaît pas l'identifiant en base (cas théorique : appelant qui n'a pas
+// demandé la colonne id) n'affiche aucune action plutôt qu'un bouton qui
+// échouerait.
+function ptActionsVoyageHtml(voyage) {
+  if (voyage.type === 'client') {
+    return voyage.ids && voyage.ids.length
+      ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-voyage-supprimer" data-cle="${voyage.cle}">Supprimer</button>`
+      : '';
+  }
+  if (!voyage.dateRetour) {
+    return `
+      <button type="button" class="pt-btn pt-btn-petit pt-voyage-retour" data-cle="${voyage.cle}">Pointer le retour</button>
+      ${voyage.idArrivee ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-voyage-supprimer" data-cle="${voyage.cle}">Supprimer</button>` : ''}`;
+  }
+  return voyage.idDepart
+    ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-voyage-retour" data-cle="${voyage.cle}">Corriger le retour</button>`
+    : '';
+}
+
+// Vendredi de la semaine d'une date donnée — proposition par défaut du
+// formulaire de retour, conforme à la règle dimanche après-midi -> vendredi
+// soir. Un séjour parti le dimanche rentre le vendredi qui suit.
+function ptVendrediDeLaSemaine(dateIso) {
+  const date = new Date(`${dateIso}T00:00:00`);
+  const jour = date.getDay(); // 0 = dimanche ... 6 = samedi
+  const joursJusquAuVendredi = jour === 0 ? 5 : (5 - jour + 7) % 7;
+  date.setDate(date.getDate() + joursJusquAuVendredi);
+  return date.toLocaleDateString('sv-SE');
+}
+
+async function ptSupprimerSejourClient(ids) {
+  const { error } = await ptSupabase.from('deplacements').delete().in('id', ids);
+  if (error) throw error;
+}
+
+async function ptSupprimerOuvertureSejourInterAgence(idArrivee) {
+  const { error } = await ptSupabase.from('horodatages').delete().eq('id', idArrivee);
+  if (error) throw error;
+}
+
+// Clôture d'un séjour en cours : deux horodatages, le départ de l'autre
+// agence puis l'arrivée. Les deux sont nécessaires — la détection des
+// séjours alterne départ/arrivée, n'en poser qu'un déséquilibrerait tous les
+// séjours suivants.
+async function ptCloturerSejourInterAgence(dateRetour, momentDepart, momentArrivee) {
+  await ptEnregistrerHorodatage('trajet_inter_site_debut', { manuel: true, moment: momentDepart, date: dateRetour });
+  await ptEnregistrerHorodatage('trajet_inter_site_fin', { manuel: true, moment: momentArrivee, date: dateRetour });
+}
+
+// Correction d'un séjour déjà clos : on déplace l'horodatage de départ qui
+// le referme, sans toucher au reste (la parité est préservée).
+async function ptCorrigerRetourInterAgence(idDepart, dateRetour, momentDepart) {
+  const { error } = await ptSupabase
+    .from('horodatages')
+    .update({ date: dateRetour, moment: momentDepart.toISOString(), source: 'manuel', saisi_a_posteriori: true })
+    .eq('id', idDepart);
+  if (error) throw error;
 }
 
 // Fusionne les lignes de nuitées consécutives (saisies nuit par nuit via
@@ -1109,7 +1359,7 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
 // l'Excel de référence.
 function ptRegrouperSejoursClient(deplacements) {
   const nuits = deplacements
-    .map((d) => ({ date: d.date_aller, avec: d.nuitees_avec_petit_dej || 0, sans: d.nuitees_sans_petit_dej || 0, commentaire: d.commentaire }))
+    .map((d) => ({ id: d.id ?? null, date: d.date_aller, avec: d.nuitees_avec_petit_dej || 0, sans: d.nuitees_sans_petit_dej || 0, commentaire: d.commentaire }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   const sejours = [];
@@ -1121,12 +1371,17 @@ function ptRegrouperSejoursClient(deplacements) {
       dernier.nuits += 1;
       dernier.dernierNuitDate = nuit.date;
       dernier.dateRetour = ptJourSuivant(nuit.date);
+      if (nuit.id !== null) dernier.ids.push(nuit.id);
       if (nuit.commentaire && !dernier.commentaire.includes(nuit.commentaire)) {
         dernier.commentaire = dernier.commentaire ? `${dernier.commentaire}, ${nuit.commentaire}` : nuit.commentaire;
       }
     } else {
       sejours.push({
         type: 'client',
+        // Lignes deplacements composant le séjour : permet de supprimer un
+        // séjour entier depuis l'onglet Suivi. Vide si l'appelant n'a pas
+        // demandé la colonne id.
+        ids: nuit.id !== null ? [nuit.id] : [],
         dateAller: nuit.date,
         dernierNuitDate: nuit.date,
         dateRetour: ptJourSuivant(nuit.date),
@@ -1633,6 +1888,7 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
       <button id="pt-rh-btn-pdf" class="pt-btn pt-btn-secondaire pt-btn-petit">Exporter PDF</button>
       <button id="pt-rh-btn-excel" class="pt-btn pt-btn-secondaire pt-btn-petit">Exporter Excel</button>
     </div>
+    ${ptRenderAlerteSejoursHtml(recap.sejoursAnormaux, 'Le salarié corrige lui-même dans Suivi > Déplacements ; le secrétariat peut aussi le faire depuis Gestion > Déplacements.')}
     <p class="pt-info">Base de préparation des bulletins de paie : heures, RTT, jours de déplacement, jours travaillés, tickets resto (règle paramétrable dans Paramètres) et congés pris par type.</p>
     <table class="pt-table-recap">
       <thead>
@@ -2463,6 +2719,11 @@ function ptCalculerSejoursInterAgence(horodatagesTrajetTous) {
   const sejours = [];
   let position = 'maison'; // 'maison' = agence de rattachement, 'away' = l'autre agence
   let dateArriveeAway = null;
+  // id de l'horodatage d'arrivée qui a ouvert le séjour : permet de proposer
+  // la suppression d'un séjour fantôme dans l'onglet Suivi (l'id n'est
+  // présent que si l'appelant a demandé la colonne, sinon undefined —
+  // l'affichage s'adapte).
+  let idArriveeAway = null;
 
   for (const evenement of horodatagesTrajetTous) {
     const dateEvenement = evenement.date;
@@ -2470,14 +2731,22 @@ function ptCalculerSejoursInterAgence(horodatagesTrajetTous) {
       if (position === 'maison') {
         position = 'away';
         dateArriveeAway = dateEvenement;
+        idArriveeAway = evenement.id ?? null;
       } else {
         position = 'maison';
       }
     } else if (evenement.type_horodatage === 'trajet_inter_site_debut') {
       if (position === 'away' && dateArriveeAway) {
         const nuits = ptNombreJoursEntre(dateArriveeAway, dateEvenement);
-        sejours.push({ dateArrivee: dateArriveeAway, dateDepart: dateEvenement, nuits });
+        sejours.push({
+          dateArrivee: dateArriveeAway,
+          dateDepart: dateEvenement,
+          nuits,
+          idArrivee: idArriveeAway,
+          idDepart: evenement.id ?? null,
+        });
         dateArriveeAway = null;
+        idArriveeAway = null;
       }
     }
   }
@@ -2485,7 +2754,7 @@ function ptCalculerSejoursInterAgence(horodatagesTrajetTous) {
   // Séjour toujours en cours (pas encore de trajet retour pointé).
   if (position === 'away' && dateArriveeAway) {
     const nuits = ptNombreJoursEntre(dateArriveeAway, ptDateDuJour());
-    sejours.push({ dateArrivee: dateArriveeAway, dateDepart: null, nuits });
+    sejours.push({ dateArrivee: dateArriveeAway, dateDepart: null, nuits, idArrivee: idArriveeAway, idDepart: null });
   }
 
   return sejours.reverse(); // le plus récent en premier

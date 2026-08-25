@@ -133,6 +133,33 @@ body {
   font-weight: 600;
 }
 
+/* Liste des séjours hors règle à l'intérieur du bloc d'alerte : le texte
+   des motifs reste lisible, sans la graisse du titre. */
+.pt-alerte ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-weight: 400;
+}
+
+/* Tableau large (déplacements : 8 colonnes) : il défile horizontalement
+   dans son propre conteneur au lieu de faire déborder la page sur mobile. */
+.pt-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pt-table-scroll .pt-table-recap { min-width: 640px; }
+
+/* Ligne de déplacement qui déborde la règle dimanche-vendredi. */
+.pt-ligne-anomalie { background: #fdecea; }
+
+.pt-deplacement-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
 .pt-message-erreur {
   background: #fdecea;
   color: var(--bfs-rouge);
