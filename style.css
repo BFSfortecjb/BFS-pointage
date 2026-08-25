@@ -150,6 +150,13 @@ body {
 
 .pt-table-scroll .pt-table-recap { min-width: 640px; }
 
+/* Précision sous un chiffre d'indicateur (heures qui composent un ratio). */
+.pt-info-inline {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--bfs-gris);
+}
+
 /* Ligne de déplacement qui déborde la règle dimanche-vendredi. */
 .pt-ligne-anomalie { background: #fdecea; }
 

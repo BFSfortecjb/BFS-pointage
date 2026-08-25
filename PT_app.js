@@ -61,6 +61,11 @@ const PT_REGIME_DE = {
   plafondAfAnnuel: 1120,   // heures d'acte de formation par an
   baseAnnuelle: 1565,      // heures annuelles de référence (1 600 h en régime général)
   moyenneHebdoAf: 25.2,    // moyenne hebdomadaire d'acte de formation
+  // En dessous de ce volume d'heures ventilées sur l'année, les indicateurs
+  // ne veulent rien dire : un ratio de 100 % calculé sur trois minutes de
+  // test n'est pas un dépassement. On affiche alors les chiffres bruts sans
+  // rendre de verdict, plutôt qu'une alerte rouge trompeuse.
+  heuresMiniSignificatives: 1,
 };
 
 // Règle BFS (Jeremy, 2026-08-25) : un déplacement va au maximum du dimanche
@@ -383,6 +388,14 @@ function ptFormatHeures(valeur) {
   return valeur.toFixed(2).replace('.', ',');
 }
 
+// Variante pour les indicateurs du Titre IV : une valeur non nulle mais
+// inférieure à un centième d'heure ne doit pas s'afficher "0,00 h" à côté
+// d'un ratio de 100 % — c'est exactement ce qui a fait croire à un bug.
+function ptFormatHeuresPrecis(valeur) {
+  if (valeur > 0 && valeur < 0.005) return '< 0,01';
+  return ptFormatHeures(valeur);
+}
+
 function ptDiversMois(m) {
   return (m.heuresParCategorie.controle || 0)
     + (m.heuresParCategorie.travaux_divers || 0)
@@ -414,31 +427,39 @@ function ptRenderVentilationCcnHtml(recap, regimeActif, annee) {
   if (!regimeActif) return tableau;
 
   const d = recap.regimeDe;
-  const badge = (depasse) => (depasse
-    ? '<span class="pt-badge pt-badge-alerte">Dépassé</span>'
-    : '<span class="pt-badge pt-badge-ok">Dans la limite</span>');
+  // Sans volume significatif, aucun verdict : un tiret vaut mieux qu'un
+  // "Dans la limite" faussement rassurant ou un "Dépassé" faussement alarmant.
+  const badge = (depasse) => {
+    if (!d.significatif) return '—';
+    return depasse
+      ? '<span class="pt-badge pt-badge-alerte">Dépassé</span>'
+      : '<span class="pt-badge pt-badge-ok">Dans la limite</span>';
+  };
 
   return `${tableau}
     <h3 class="pt-recap-mois-titre">Régime formateur D/E — plafonds du Titre IV</h3>
     <p class="pt-info">Ce salarié est déclaré formateur D ou E (Administration &gt; Profils). Plafonds de l'accord RTT du 6 décembre 1999, Titre IV. Indicateurs calculés sur les heures ventilées de l'année affichée uniquement — un exercice incomplet donne donc des valeurs partielles.</p>
+    ${d.significatif ? '' : `<p class="pt-info"><strong>Pas encore assez d'heures saisies cette année (${ptFormatHeuresPrecis(d.heuresVentilees)} h ventilées) pour que ces plafonds aient un sens.</strong> Les chiffres sont affichés à titre indicatif, sans verdict : une part d'action de formation calculée sur quelques minutes ne signifie rien.</p>`}
     <table class="pt-table-admin">
       <thead><tr><th>Indicateur</th><th>Constaté</th><th>Plafond</th><th>État</th></tr></thead>
       <tbody>
         <tr>
           <td>Part d'action de formation (AF / AF+PR)</td>
-          <td>${d.ratioAf === null ? '—' : `${(d.ratioAf * 100).toFixed(1).replace('.', ',')} %`}</td>
+          <td>${d.ratioAf === null
+            ? '—'
+            : `${(d.ratioAf * 100).toFixed(1).replace('.', ',')} %<br><span class="pt-info-inline">${ptFormatHeuresPrecis(d.af)} h sur ${ptFormatHeuresPrecis(d.af + d.pr)} h</span>`}</td>
           <td>${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} %</td>
           <td>${d.ratioAf === null ? '—' : badge(d.ratioDepasse)}</td>
         </tr>
         <tr>
           <td>Heures d'action de formation</td>
-          <td>${ptFormatHeures(d.af)} h</td>
+          <td>${ptFormatHeuresPrecis(d.af)} h</td>
           <td>${PT_REGIME_DE.plafondAfAnnuel} h/an</td>
           <td>${badge(d.plafondAfDepasse)}</td>
         </tr>
         <tr>
           <td>Total des heures travaillées</td>
-          <td>${ptFormatHeures(recap.total.heures)} h</td>
+          <td>${ptFormatHeuresPrecis(recap.total.heures)} h</td>
           <td>${PT_REGIME_DE.baseAnnuelle} h/an</td>
           <td>${badge(d.baseAnnuelleDepassee)}</td>
         </tr>
@@ -784,14 +805,23 @@ function ptIndicateursRegimeDe(total) {
   const pr = total.heuresParCategorie.preparation_recherche || 0;
   const ac = total.heuresParCategorie.activite_connexe || 0;
   const baseRatio = af + pr;
+  const heuresVentilees = Object.values(total.heuresParCategorie)
+    .reduce((somme, valeur) => somme + valeur, 0);
+  // Un ratio calculé sur un volume dérisoire (journée de test, début
+  // d'année) afficherait "100 % — Dépassé" sans qu'aucune règle ne soit
+  // réellement enfreinte. Tant que le volume n'est pas significatif, on
+  // montre les chiffres mais on ne rend pas de verdict.
+  const significatif = heuresVentilees >= PT_REGIME_DE.heuresMiniSignificatives;
   return {
     af,
     pr,
     ac,
+    heuresVentilees,
+    significatif,
     ratioAf: baseRatio > 0 ? af / baseRatio : null,
-    ratioDepasse: baseRatio > 0 && af / baseRatio > PT_REGIME_DE.ratioAfMax,
-    plafondAfDepasse: af > PT_REGIME_DE.plafondAfAnnuel,
-    baseAnnuelleDepassee: total.heures > PT_REGIME_DE.baseAnnuelle,
+    ratioDepasse: significatif && baseRatio > 0 && af / baseRatio > PT_REGIME_DE.ratioAfMax,
+    plafondAfDepasse: significatif && af > PT_REGIME_DE.plafondAfAnnuel,
+    baseAnnuelleDepassee: significatif && total.heures > PT_REGIME_DE.baseAnnuelle,
   };
 }
 
