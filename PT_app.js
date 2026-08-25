@@ -54,8 +54,61 @@ const PT_ORDRE_CATEGORIES = [
 // Plafonds du régime des formateurs D et E (CCN IDCC 1516, accord RTT du
 // 6 décembre 1999, Titre IV). Valeurs imposées par la convention collective,
 // donc constantes et non modifiables dans l'écran Paramètres — seul
-// l'assujettissement d'un salarié l'est (profils.regime_formateur_de,
-// Administration > Profils).
+// l'assujettissement découle du coefficient du salarié (profils.coefficient,
+// Administration > Profils), non d'une case à cocher.
+// Statuts issus de l'accord de classification du 16 janvier 2017, qui a
+// remplacé les anciens paliers lettrés (dont les « formateurs D et E ») par
+// 31 paliers numérotés. Le coefficient figure au contrat de travail et sur
+// le bulletin de paie : c'est une donnée opposable, contrairement à une
+// lettre qui n'existe plus dans la grille.
+// La tranche 310-349 peut relever du statut cadre sous conditions de
+// management ou d'étendue des connaissances — l'ambiguïté est affichée
+// plutôt que tranchée en silence.
+// Les deux seuils sont paramétrables (Administration > Paramètres) : la
+// grille de branche peut être renégociée, et une entreprise peut appliquer
+// des repères différents. Les valeurs par défaut sont celles de l'accord de
+// 2017. Le seuil cadre est le seul qui ait un effet réel : il décide si les
+// plafonds d'acte de formation s'affichent ou non.
+const PT_SEUILS_COEFFICIENT_DEFAUT = { technicien: 171, cadre: 350 };
+// Largeur de la zone grise sous le seuil cadre (310-349 avec les valeurs par
+// défaut) : ces paliers peuvent relever du statut cadre selon les critères
+// de management et d'étendue des connaissances.
+const PT_COEFFICIENT_ZONE_GRISE = 40;
+
+function ptSeuilsCoefficient() {
+  return {
+    technicien: ptParametreNombre('coefficient_seuil_technicien', PT_SEUILS_COEFFICIENT_DEFAUT.technicien),
+    cadre: ptParametreNombre('coefficient_seuil_cadre', PT_SEUILS_COEFFICIENT_DEFAUT.cadre),
+  };
+}
+
+function ptStatutDuCoefficient(coefficient) {
+  if (!coefficient) return null;
+  const seuils = ptSeuilsCoefficient();
+  if (coefficient >= seuils.cadre) {
+    return { libelle: 'Cadre', cadre: true, ambigu: false };
+  }
+  if (coefficient < seuils.technicien) {
+    return { libelle: 'Employé', cadre: false, ambigu: false };
+  }
+  const ambigu = coefficient >= seuils.cadre - PT_COEFFICIENT_ZONE_GRISE;
+  return {
+    libelle: ambigu
+      ? 'Technicien / agent de maîtrise (cadre possible sous conditions)'
+      : 'Technicien / agent de maîtrise',
+    cadre: false,
+    ambigu,
+  };
+}
+
+// Les plafonds d'acte de formation visent les formateurs non cadres. Un
+// coefficient non renseigné ne déclenche rien : mieux vaut n'afficher aucun
+// plafond qu'en afficher un fondé sur une supposition.
+function ptPlafondsAfApplicables(coefficient) {
+  const statut = ptStatutDuCoefficient(coefficient);
+  return Boolean(statut) && !statut.cadre;
+}
+
 const PT_REGIME_DE = {
   ratioAfMax: 0.72,        // AF <= 72 % de (AF + PR)
   plafondAfAnnuel: 1120,   // heures d'acte de formation par an
@@ -382,8 +435,9 @@ const PT_LABELS_MOIS = [
 
 // --- Ventilation CCN : bloc HTML partagé par le récap du salarié (onglet
 // Suivi) et le récap RH admin — même tableau, mêmes chiffres, une seule
-// implémentation. `regimeActif` = profils.regime_formateur_de du salarié
-// concerné : il conditionne uniquement l'ajout du bloc de plafonds.
+// implémentation. `coefficient` = profils.coefficient du salarié concerné :
+// il détermine le statut, et donc l'affichage ou non des plafonds d'acte de
+// formation (réservés aux non-cadres).
 function ptFormatHeures(valeur) {
   return valeur.toFixed(2).replace('.', ',');
 }
@@ -402,7 +456,7 @@ function ptDiversMois(m) {
     + (m.heuresParCategorie.autre || 0);
 }
 
-function ptRenderVentilationCcnHtml(recap, regimeActif, annee) {
+function ptRenderVentilationCcnHtml(recap, coefficient, annee) {
   const ligne = (m, cellule) => `
     <tr>
       <${cellule}>${m.label}</${cellule}>
@@ -424,7 +478,15 @@ function ptRenderVentilationCcnHtml(recap, regimeActif, annee) {
       <tfoot>${ligne({ ...recap.total, label: '<strong>Total</strong>' }, 'th')}</tfoot>
     </table>`;
 
-  if (!regimeActif) return tableau;
+  const statut = ptStatutDuCoefficient(coefficient);
+  if (!statut) {
+    return `${tableau}
+      <p class="pt-info">Coefficient de classification non renseigné pour ce salarié (Administration &gt; Profils). Sans lui, les plafonds d'acte de formation ne sont pas affichés — ils ne concernent que les non-cadres, et rien ne permet ici de le déterminer.</p>`;
+  }
+  if (statut.cadre) {
+    return `${tableau}
+      <p class="pt-info">Coefficient ${coefficient} — statut cadre. Les plafonds d'acte de formation ne s'appliquent pas.</p>`;
+  }
 
   const d = recap.regimeDe;
   // Sans volume significatif, aucun verdict : un tiret vaut mieux qu'un
@@ -437,8 +499,9 @@ function ptRenderVentilationCcnHtml(recap, regimeActif, annee) {
   };
 
   return `${tableau}
-    <h3 class="pt-recap-mois-titre">Régime formateur D/E — plafonds du Titre IV</h3>
-    <p class="pt-info">Ce salarié est déclaré formateur D ou E (Administration &gt; Profils). Plafonds de l'accord RTT du 6 décembre 1999, Titre IV. Indicateurs calculés sur les heures ventilées de l'année affichée uniquement — un exercice incomplet donne donc des valeurs partielles.</p>
+    <h3 class="pt-recap-mois-titre">Plafonds d'acte de formation (Titre IV)</h3>
+    <p class="pt-info">Coefficient ${coefficient} — ${ptEchapperHtml(statut.libelle)}. Les plafonds de l'accord RTT du 6 décembre 1999 (Titre IV), complété par l'accord du 24 mai 2007, visent les formateurs non cadres. Indicateurs calculés sur les heures ventilées de l'année affichée uniquement — un exercice incomplet donne donc des valeurs partielles.</p>
+    ${statut.ambigu ? `<p class="pt-info"><strong>Coefficient dans la zone 310-349 :</strong> ce palier peut relever du statut cadre selon les critères de management et d'étendue des connaissances. Si ce salarié est cadre, ces plafonds ne le concernent pas — vérifie son contrat de travail.</p>` : ''}
     ${d.significatif ? '' : `<p class="pt-info"><strong>Pas encore assez d'heures saisies cette année (${ptFormatHeuresPrecis(d.heuresVentilees)} h ventilées) pour que ces plafonds aient un sens.</strong> Les chiffres sont affichés à titre indicatif, sans verdict : une part d'action de formation calculée sur quelques minutes ne signifie rien.</p>`}
     <table class="pt-table-admin">
       <thead><tr><th>Indicateur</th><th>Constaté</th><th>Plafond</th><th>État</th></tr></thead>
@@ -506,7 +569,7 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
         </tr>
       </tfoot>
     </table>
-    ${ptRenderVentilationCcnHtml(recap, Boolean(S.profil.regime_formateur_de), S.suiviAnnee)}`;
+    ${ptRenderVentilationCcnHtml(recap, S.profil.coefficient, S.suiviAnnee)}`;
 
   document.getElementById('pt-annee-prec').addEventListener('click', () => {
     S.suiviAnnee -= 1;
@@ -549,6 +612,7 @@ function ptLignesVentilationExcel(recap) {
   return [...recap.mois.map(ligne), ligne({ ...recap.total, label: 'Total' })];
 }
 
+// Lignes du tableau des plafonds d'acte de formation (ex-régime D/E).
 function ptLignesRegimeDe(recap) {
   const d = recap.regimeDe;
   const etat = (depasse) => (depasse ? 'Dépassé' : 'Dans la limite');
@@ -570,7 +634,7 @@ function ptLignesRegimeDe(recap) {
 
 // Ajoute au document PDF la ventilation CCN puis, si le salarié y est
 // assujetti, les plafonds du Titre IV. Renvoie le document pour la forme.
-function ptAjouterVentilationPdf(doc, recap, regimeActif) {
+function ptAjouterVentilationPdf(doc, recap, plafondsApplicables) {
   const ventilation = ptLignesVentilationPdf(recap);
   doc.autoTable({
     startY: doc.lastAutoTable.finalY + 10,
@@ -579,10 +643,10 @@ function ptAjouterVentilationPdf(doc, recap, regimeActif) {
     foot: ventilation.foot,
     styles: { fontSize: 8 },
   });
-  if (!regimeActif) return doc;
+  if (!plafondsApplicables) return doc;
   doc.autoTable({
     startY: doc.lastAutoTable.finalY + 8,
-    head: [['Régime formateur D/E', 'Constaté', 'Plafond', 'État']],
+    head: [['Plafonds d\'acte de formation', 'Constaté', 'Plafond', 'État']],
     body: ptLignesRegimeDe(recap),
     styles: { fontSize: 8 },
   });
@@ -615,7 +679,7 @@ function ptExporterRecapPdf(recap, annee) {
     ]],
     styles: { fontSize: 9 },
   });
-  ptAjouterVentilationPdf(doc, recap, Boolean(S.profil.regime_formateur_de));
+  ptAjouterVentilationPdf(doc, recap, ptPlafondsAfApplicables(S.profil.coefficient));
   doc.save(`recap_${annee}_${S.profil.nom}.pdf`);
 }
 
@@ -1619,7 +1683,14 @@ const PT_LABELS_PARAMETRE = {
   trajet_compte_heures_vehicule_perso: 'Trajet compté en heures — véhicule personnel',
   ticket_resto_jour_travaille: 'Ticket resto — jour travaillé',
   ticket_resto_jour_deplacement: 'Ticket resto — jour de déplacement',
+  coefficient_seuil_technicien: 'Coefficient — seuil du statut technicien / agent de maîtrise',
+  coefficient_seuil_cadre: 'Coefficient — seuil du statut cadre',
 };
+
+// Paramètres saisis en nombre plutôt qu'en Activé/Désactivé. Le reste de la
+// table reste booléen ; cette liste évite d'avoir à typer les paramètres en
+// base pour deux valeurs.
+const PT_PARAMETRES_NUMERIQUES = new Set(['coefficient_seuil_technicien', 'coefficient_seuil_cadre']);
 
 async function ptRenderOngletAdmin(conteneur) {
   conteneur.innerHTML = `<p>Chargement…</p>`;
@@ -1749,9 +1820,9 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
 
   zoneContenu.innerHTML = `
     <p class="pt-info">Rôle, agence de rattachement (sert au calcul automatique des nuits inter-agence) et statut actif/inactif. Chaque changement est enregistré immédiatement.</p>
-    <p class="pt-info">Régime D/E : à cocher pour un salarié classé formateur D ou E (CCN IDCC 1516, accord RTT du 06/12/1999, Titre IV). Sa ventilation horaire est alors comparée aux plafonds du Titre IV : part d'action de formation limitée à ${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} % de AF+PR, ${PT_REGIME_DE.plafondAfAnnuel} h d'action de formation par an, base annuelle de ${PT_REGIME_DE.baseAnnuelle} h. Décoché = régime général (1 600 h, RTT 35-39 h).</p>
+    <p class="pt-info">Coefficient : celui qui figure au contrat de travail et sur le bulletin de paie. Il détermine le statut affiché (seuils modifiables dans Paramètres) et, pour un non-cadre, l'affichage des plafonds d'acte de formation dans le Récap RH — part d'action de formation limitée à ${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} % de AF+PR, ${PT_REGIME_DE.plafondAfAnnuel} h par an, base annuelle de ${PT_REGIME_DE.baseAnnuelle} h. Laissé vide, aucun plafond n'est affiché.</p>
     <table class="pt-table-admin">
-      <thead><tr><th>Nom</th><th>Rôle</th><th>Agence</th><th>Régime D/E</th><th>Actif</th></tr></thead>
+      <thead><tr><th>Nom</th><th>Rôle</th><th>Agence</th><th>Coefficient</th><th>Statut</th><th>Actif</th></tr></thead>
       <tbody>
         ${data.map((p) => `
           <tr>
@@ -1769,8 +1840,9 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
               </select>
             </td>
             <td>
-              <input type="checkbox" class="pt-profil-regime-de" data-id="${p.id}" ${p.regime_formateur_de ? 'checked' : ''} title="Formateur D/E (CCN IDCC 1516, Titre IV)" />
+              <input type="number" class="pt-profil-coefficient" data-id="${p.id}" min="100" max="2000" step="1" value="${p.coefficient ?? ''}" placeholder="—" />
             </td>
+            <td class="pt-profil-statut" data-id="${p.id}">${ptLibelleStatutCoefficient(p.coefficient)}</td>
             <td>
               <input type="checkbox" class="pt-profil-actif" data-id="${p.id}" ${p.actif ? 'checked' : ''} />
             </td>
@@ -1798,14 +1870,23 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
       catch (erreur) { gererErreur(erreur); }
     });
   });
-  zoneContenu.querySelectorAll('.pt-profil-regime-de').forEach((checkbox) => {
-    checkbox.addEventListener('change', async () => {
+  zoneContenu.querySelectorAll('.pt-profil-coefficient').forEach((champ) => {
+    champ.addEventListener('change', async () => {
+      const brut = champ.value.trim();
+      const coefficient = brut === '' ? null : Number.parseInt(brut, 10);
+      if (coefficient !== null && (!Number.isFinite(coefficient) || coefficient < 100 || coefficient > 2000)) {
+        gererErreur(new Error('coefficient hors limites'));
+        return;
+      }
       try {
-        await ptModifierProfil(checkbox.dataset.id, { regime_formateur_de: checkbox.checked });
-        // Si l'admin modifie son propre régime, rafraîchir S.profil pour que
-        // son propre onglet Suivi affiche (ou masque) les plafonds sans avoir
-        // à recharger la page.
-        if (checkbox.dataset.id === S.session.user.id) await ptChargerProfil();
+        await ptModifierProfil(champ.dataset.id, { coefficient });
+        // Statut recalculé à côté du champ, sans recharger tout l'écran.
+        const cellule = zoneContenu.querySelector(`.pt-profil-statut[data-id="${champ.dataset.id}"]`);
+        if (cellule) cellule.textContent = ptLibelleStatutCoefficient(coefficient);
+        // Si l'admin modifie son propre coefficient, rafraîchir S.profil pour
+        // que son propre onglet Suivi affiche (ou masque) les plafonds sans
+        // avoir à recharger la page.
+        if (champ.dataset.id === S.session.user.id) await ptChargerProfil();
       } catch (erreur) { gererErreur(erreur); }
     });
   });
@@ -1815,6 +1896,11 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
       catch (erreur) { gererErreur(erreur); }
     });
   });
+}
+
+function ptLibelleStatutCoefficient(coefficient) {
+  const statut = ptStatutDuCoefficient(coefficient);
+  return statut ? statut.libelle : '—';
 }
 
 async function ptModifierProfil(id, champs) {
@@ -1836,22 +1922,36 @@ async function ptRenderAdminParametres(zoneContenu, conteneur) {
         <li class="pt-jour-suivi">
           <div class="pt-jour-suivi-entete">
             <strong>${ptEchapperHtml(PT_LABELS_PARAMETRE[p.cle] || p.cle)}</strong>
-            <select class="pt-parametre-valeur" data-cle="${p.cle}">
-              <option value="true" ${p.valeur === 'true' ? 'selected' : ''}>Activé</option>
-              <option value="false" ${p.valeur !== 'true' ? 'selected' : ''}>Désactivé</option>
-            </select>
+            ${PT_PARAMETRES_NUMERIQUES.has(p.cle)
+              ? `<input type="number" class="pt-parametre-valeur pt-parametre-nombre" data-cle="${p.cle}" min="100" max="2000" step="1" value="${ptEchapperHtml(p.valeur)}" />`
+              : `<select class="pt-parametre-valeur" data-cle="${p.cle}">
+                   <option value="true" ${p.valeur === 'true' ? 'selected' : ''}>Activé</option>
+                   <option value="false" ${p.valeur !== 'true' ? 'selected' : ''}>Désactivé</option>
+                 </select>`}
           </div>
           ${p.description ? `<div class="pt-jour-suivi-details">${ptEchapperHtml(p.description)}</div>` : ''}
         </li>`).join('')}
     </ul>
     <p id="pt-parametres-erreur" class="pt-message-erreur" hidden></p>`;
 
-  zoneContenu.querySelectorAll('.pt-parametre-valeur').forEach((select) => {
-    select.addEventListener('change', async () => {
+  zoneContenu.querySelectorAll('.pt-parametre-valeur').forEach((champ) => {
+    champ.addEventListener('change', async () => {
       const erreurEl = document.getElementById('pt-parametres-erreur');
       erreurEl.hidden = true;
+      // Un seuil vidé ou aberrant ferait basculer tous les salariés d'un
+      // statut à l'autre sans que personne ne s'en aperçoive : on refuse la
+      // saisie plutôt que de l'enregistrer.
+      if (PT_PARAMETRES_NUMERIQUES.has(champ.dataset.cle)) {
+        const valeur = Number.parseInt(champ.value, 10);
+        if (!Number.isFinite(valeur) || valeur < 100 || valeur > 2000) {
+          erreurEl.textContent = 'Le seuil doit être un nombre compris entre 100 et 2000.';
+          erreurEl.hidden = false;
+          champ.value = S.parametres[champ.dataset.cle] ?? '';
+          return;
+        }
+      }
       try {
-        await ptModifierParametre(select.dataset.cle, select.value);
+        await ptModifierParametre(champ.dataset.cle, champ.value);
         await ptChargerParametres(); // recharge S.parametres pour le reste de l'appli (ex. geoloc_active)
       } catch (erreur) {
         erreurEl.textContent = 'Échec de l\'enregistrement. Réessaie.';
@@ -1876,9 +1976,9 @@ async function ptModifierParametre(cle, valeur) {
 // seulement l'administratif applicatif.
 async function ptRenderAdminRh(zoneContenu, conteneur) {
   zoneContenu.innerHTML = `<p>Chargement…</p>`;
-  // regime_formateur_de est chargé ici pour conditionner l'affichage des
-  // plafonds du Titre IV au salarié sélectionné (et non à l'admin connecté).
-  const { data: profils, error } = await ptSupabase.from('profils').select('id, nom, prenom, regime_formateur_de').order('nom');
+  // coefficient chargé ici pour conditionner l'affichage des plafonds au
+  // salarié sélectionné (et non à l'admin connecté).
+  const { data: profils, error } = await ptSupabase.from('profils').select('id, nom, prenom, coefficient').order('nom');
   if (error) throw error;
   if (!profils.length) {
     zoneContenu.innerHTML = '<p class="pt-liste-vide">Aucun salarié.</p>';
@@ -1957,7 +2057,7 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
           <tr><td>${label}</td><td>${recap.total.congesParType[type] || 0}</td></tr>`).join('')}
       </tbody>
     </table>
-    ${ptRenderVentilationCcnHtml(recap, Boolean(technicien.regime_formateur_de), S.adminRhAnnee)}`;
+    ${ptRenderVentilationCcnHtml(recap, technicien.coefficient, S.adminRhAnnee)}`;
 
   document.getElementById('pt-rh-annee-prec').addEventListener('click', () => {
     S.adminRhAnnee -= 1;
@@ -1967,12 +2067,12 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
     S.adminRhAnnee += 1;
     ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien);
   });
-  const regimeActif = Boolean(technicien.regime_formateur_de);
-  document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee, regimeActif));
-  document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee, regimeActif));
+  const plafondsApplicables = ptPlafondsAfApplicables(technicien.coefficient);
+  document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee, plafondsApplicables));
+  document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee, plafondsApplicables));
 }
 
-function ptExporterRecapRhPdf(recap, nomPrenom, annee, regimeActif = false) {
+function ptExporterRecapRhPdf(recap, nomPrenom, annee, plafondsApplicables = false) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   doc.setFontSize(14);
@@ -2009,11 +2109,11 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee, regimeActif = false) {
     body: Object.entries(PT_LABELS_CONGE).map(([type, label]) => [label, String(recap.total.congesParType[type] || 0)]),
     styles: { fontSize: 9 },
   });
-  ptAjouterVentilationPdf(doc, recap, regimeActif);
+  ptAjouterVentilationPdf(doc, recap, plafondsApplicables);
   doc.save(`recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.pdf`);
 }
 
-function ptExporterRecapRhExcel(recap, nomPrenom, annee, regimeActif = false) {
+function ptExporterRecapRhExcel(recap, nomPrenom, annee, plafondsApplicables = false) {
   const lignesMois = recap.mois.map((m) => ({
     Mois: m.label,
     Heures: Number(m.heures.toFixed(2)),
@@ -2041,11 +2141,11 @@ function ptExporterRecapRhExcel(recap, nomPrenom, annee, regimeActif = false) {
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesMois), 'Récap mensuel');
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesConges), 'Congés par type');
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesVentilationExcel(recap)), 'Ventilation CCN');
-  if (regimeActif) {
+  if (plafondsApplicables) {
     const lignesRegime = ptLignesRegimeDe(recap).map(([indicateur, constate, plafond, etat]) => ({
       Indicateur: indicateur, Constaté: constate, Plafond: plafond, État: etat,
     }));
-    XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesRegime), 'Régime D-E');
+    XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesRegime), 'Plafonds AF');
   }
   XLSX.writeFile(classeur, `recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.xlsx`);
 }

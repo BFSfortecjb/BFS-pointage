@@ -380,3 +380,21 @@ body {
 }
 
 
+
+/* Saisie numérique dans les écrans d'administration : coefficient de
+   classification (Profils) et seuils de statut (Paramètres). Largeur fixe
+   pour que la colonne ne s'étire pas, et cible tactile confortable. */
+.pt-profil-coefficient,
+.pt-parametre-nombre {
+  width: 6.5em;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.pt-profil-statut {
+  font-size: 0.85rem;
+  color: var(--bfs-gris);
+}

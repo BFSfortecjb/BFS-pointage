@@ -90,6 +90,14 @@ function ptParametreActif(cle) {
   return S.parametres[cle] === 'true';
 }
 
+// Paramètre numérique (seuils de coefficient). Retombe sur la valeur par
+// défaut si la clé est absente ou illisible : un paramètre mal saisi ne doit
+// pas faire disparaître un écran.
+function ptParametreNombre(cle, defaut) {
+  const valeur = Number.parseInt(S.parametres[cle], 10);
+  return Number.isFinite(valeur) ? valeur : defaut;
+}
+
 async function ptChargerCentres() {
   const { data, error } = await ptSupabase
     .from('centres')
