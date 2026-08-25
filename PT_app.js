@@ -275,15 +275,22 @@ function ptRenderLogin(conteneur) {
 }
 
 // --- Coquille applicative : navigation + contenu de l'onglet actif -----
+// Écrans accessibles sans figurer dans la barre d'onglets (elle est déjà
+// chargée sur mobile) : « Mon compte » s'ouvre depuis l'en-tête.
+const PT_ECRANS_HORS_ONGLETS = new Set(['compte']);
+
 function ptRenderApp(conteneur) {
   const onglets = PT_ONGLETS_PAR_ROLE[S.profil.role] || [];
-  if (!onglets.find((o) => o.id === S.ongletActif)) S.ongletActif = onglets[0]?.id;
+  if (!PT_ECRANS_HORS_ONGLETS.has(S.ongletActif) && !onglets.find((o) => o.id === S.ongletActif)) {
+    S.ongletActif = onglets[0]?.id;
+  }
 
   conteneur.innerHTML = `
     <header class="pt-header">
       <div class="pt-header-titre">Pointage BFS</div>
       <div class="pt-header-utilisateur">
         ${ptEchapperHtml(S.profil.prenom)} ${ptEchapperHtml(S.profil.nom)}
+        <button id="pt-btn-compte" class="pt-btn pt-btn-secondaire pt-btn-petit">Mon compte</button>
         <button id="pt-btn-deconnexion" class="pt-btn pt-btn-secondaire pt-btn-petit">Déconnexion</button>
       </div>
     </header>
@@ -291,6 +298,11 @@ function ptRenderApp(conteneur) {
       ${onglets.map((o) => `<button class="pt-nav-item ${o.id === S.ongletActif ? 'pt-nav-item-actif' : ''}" data-onglet="${o.id}">${o.label}</button>`).join('')}
     </nav>
     <main id="pt-contenu" class="pt-contenu"></main>`;
+
+  document.getElementById('pt-btn-compte').addEventListener('click', () => {
+    S.ongletActif = 'compte';
+    ptRenderApp(conteneur);
+  });
 
   document.getElementById('pt-btn-deconnexion').addEventListener('click', async () => {
     await ptDeconnecter();
@@ -309,8 +321,90 @@ function ptRenderApp(conteneur) {
     suivi: ptRenderOngletSuivi,
     admin: ptRenderOngletAdmin,
     secretariat: ptRenderOngletSecretariat,
+    compte: ptRenderOngletCompte,
   };
   (rendus[S.ongletActif] || ptRenderOngletPlaceholder)(document.getElementById('pt-contenu'));
+}
+
+// --- Mon compte : changement du mot de passe ----------------------------
+// Tous les comptes sont créés avec le même mot de passe initial (décision
+// Jeremy, 2026-08-25), à charge pour chacun de le changer. La longueur
+// minimale exigée ici est volontairement supérieure à celle du mot de passe
+// initial : c'est ce qui empêche de « changer » son mot de passe en
+// resaisissant le même, sans avoir à écrire ce mot de passe dans le code
+// (le dépôt GitHub est public).
+const PT_MOT_DE_PASSE_LONGUEUR_MINI = 10;
+
+async function ptRenderOngletCompte(conteneur) {
+  conteneur.innerHTML = `
+    <section class="pt-carte">
+      <h2>Mon compte</h2>
+      <p class="pt-info">${ptEchapperHtml(S.profil.prenom)} ${ptEchapperHtml(S.profil.nom)} — ${ptEchapperHtml(PT_LABELS_ROLE[S.profil.role] || S.profil.role)}${S.profil.coefficient ? ` — coefficient ${S.profil.coefficient}` : ''}</p>
+
+      ${S.profil.mot_de_passe_change
+        ? ''
+        : `<p class="pt-alerte">Tu utilises encore le mot de passe qui t'a été communiqué à la création de ton compte. Change-le : il est identique pour tout le monde.</p>`}
+
+      <h3 class="pt-recap-mois-titre">Changer mon mot de passe</h3>
+      <form id="pt-form-mot-de-passe" class="pt-form-activite">
+        <label>Nouveau mot de passe
+          <input type="password" name="mot_de_passe" autocomplete="new-password" minlength="${PT_MOT_DE_PASSE_LONGUEUR_MINI}" required />
+        </label>
+        <label>Confirmation
+          <input type="password" name="confirmation" autocomplete="new-password" minlength="${PT_MOT_DE_PASSE_LONGUEUR_MINI}" required />
+        </label>
+        <p class="pt-info">Au moins ${PT_MOT_DE_PASSE_LONGUEUR_MINI} caractères. Choisis-en un que tu es seul à connaître.</p>
+        <p id="pt-mot-de-passe-message" class="pt-message-erreur" hidden></p>
+        <button type="submit" class="pt-btn">Enregistrer</button>
+      </form>
+
+      <button id="pt-btn-retour-compte" class="pt-btn pt-btn-secondaire pt-btn-petit">Retour</button>
+    </section>`;
+
+  const messageEl = document.getElementById('pt-mot-de-passe-message');
+  const afficherMessage = (texte, succes = false) => {
+    messageEl.textContent = texte;
+    messageEl.className = succes ? 'pt-message-succes' : 'pt-message-erreur';
+    messageEl.hidden = false;
+  };
+
+  document.getElementById('pt-btn-retour-compte').addEventListener('click', () => {
+    S.ongletActif = 'pointage';
+    ptRenderApp(document.getElementById('app'));
+  });
+
+  document.getElementById('pt-form-mot-de-passe').addEventListener('submit', async (evenement) => {
+    evenement.preventDefault();
+    const champs = new FormData(evenement.target);
+    const motDePasse = champs.get('mot_de_passe');
+    if (motDePasse !== champs.get('confirmation')) {
+      afficherMessage('Les deux saisies ne sont pas identiques.');
+      return;
+    }
+    if (motDePasse.length < PT_MOT_DE_PASSE_LONGUEUR_MINI) {
+      afficherMessage(`Le mot de passe doit faire au moins ${PT_MOT_DE_PASSE_LONGUEUR_MINI} caractères.`);
+      return;
+    }
+    const bouton = evenement.target.querySelector('button[type="submit"]');
+    bouton.disabled = true;
+    try {
+      const { error } = await ptSupabase.auth.updateUser({ password: motDePasse });
+      if (error) throw error;
+      // Le marquage passe par une fonction SECURITY DEFINER : les salariés
+      // n'ont pas le droit d'écrire dans profils (ils pourraient sinon
+      // changer leur propre rôle).
+      const { error: erreurMarquage } = await ptSupabase.rpc('marquer_mot_de_passe_change');
+      if (erreurMarquage) throw erreurMarquage;
+      await ptChargerProfil();
+      evenement.target.reset();
+      afficherMessage('Mot de passe modifié.', true);
+    } catch (erreur) {
+      afficherMessage('Échec de la modification. Réessaie.');
+      PT_DEBUG.log(`Échec changement de mot de passe : ${erreur.message}`, true);
+    } finally {
+      bouton.disabled = false;
+    }
+  });
 }
 
 function ptRenderOngletPlaceholder(conteneur) {
@@ -2517,6 +2611,12 @@ async function ptRenderOngletPointage(conteneur) {
     : [];
 
   conteneur.innerHTML = `
+    ${S.profil.mot_de_passe_change ? '' : `
+      <section class="pt-carte">
+        <p class="pt-alerte">Ton mot de passe est encore celui qui t'a été communiqué à la création de ton compte — il est identique pour tout le monde.</p>
+        <button id="pt-btn-changer-mot-de-passe" class="pt-btn pt-btn-petit">Changer mon mot de passe</button>
+      </section>`}
+
     <section class="pt-carte">
       <h2>Aujourd'hui — ${new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</h2>
 
@@ -2737,6 +2837,14 @@ async function ptRenderOngletPointage(conteneur) {
         }
       });
     }
+  }
+
+  const boutonChangerMdp = document.getElementById('pt-btn-changer-mot-de-passe');
+  if (boutonChangerMdp) {
+    boutonChangerMdp.addEventListener('click', () => {
+      S.ongletActif = 'compte';
+      ptRenderApp(document.getElementById('app'));
+    });
   }
 
   document.getElementById('pt-btn-trajet').addEventListener('click', async (evenement) => {

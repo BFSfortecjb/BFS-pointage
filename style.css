@@ -398,3 +398,18 @@ body {
   font-size: 0.85rem;
   color: var(--bfs-gris);
 }
+
+/* Confirmation d'une action réussie — pendant de .pt-message-erreur. */
+.pt-message-succes {
+  background: #e6f4ea;
+  color: #1e7e34;
+  border: 1px solid #1e7e34;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 16px 0;
+}
+
+/* En-tête : sur petit écran, nom + boutons passent à la ligne au lieu de
+   déborder. */
+.pt-header { flex-wrap: wrap; gap: 8px; }
+.pt-header-utilisateur { flex-wrap: wrap; }
