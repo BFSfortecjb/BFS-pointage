@@ -185,6 +185,48 @@ body {
 
 .pt-form-manuel { margin-top: 12px; }
 
+/* Détail des tâches saisi à la clôture d'un bloc de travail (pause
+   méridienne ou fin de journée). Le champ et le bouton "Ajouter" sur une
+   même ligne, la liste des tâches ajoutées en dessous. */
+.pt-tache-ajout {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.pt-tache-ajout input {
+  flex: 1;
+  min-width: 0; /* sans quoi le champ déborde de la carte sur petit écran */
+}
+
+.pt-tache-ajout .pt-btn { white-space: nowrap; }
+
+.pt-liste-taches {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.pt-liste-taches li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-tache-retirer {
+  border: none;
+  background: none;
+  color: var(--bfs-rouge);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  /* Cible tactile confortable au pouce, sans agrandir la ligne. */
+  padding: 6px 10px;
+}
+
 .pt-nuitee-boutons {
   display: flex;
   gap: 8px;
@@ -254,7 +296,8 @@ body {
   text-align: left;
 }
 
-.pt-table-recap tfoot td {
+.pt-table-recap tfoot td,
+.pt-table-recap tfoot th {
   border-top: 2px solid var(--bfs-gris);
   border-bottom: none;
 }

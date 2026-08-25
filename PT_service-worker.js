@@ -7,7 +7,7 @@
 // données (/auth/, /rest/).
 // =========================================================================
 
-const VERSION_CACHE = 'pointage-v15';
+const VERSION_CACHE = 'pointage-v17';
 
 const FICHIERS_APP_SHELL = [
   './',

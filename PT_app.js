@@ -44,6 +44,25 @@ const PT_LABELS_ACTIVITE = {
   autre: 'Autre',
 };
 
+// Ordre d'affichage de la ventilation horaire : les trois catégories du
+// Titre IV de la CCN d'abord (AF, PR, AC), puis les catégories propres à BFS.
+const PT_ORDRE_CATEGORIES = [
+  'acte_formation', 'preparation_recherche', 'activite_connexe',
+  'controle', 'travaux_divers', 'autre',
+];
+
+// Plafonds du régime des formateurs D et E (CCN IDCC 1516, accord RTT du
+// 6 décembre 1999, Titre IV). Valeurs imposées par la convention collective,
+// donc constantes et non modifiables dans l'écran Paramètres — seul
+// l'assujettissement d'un salarié l'est (profils.regime_formateur_de,
+// Administration > Profils).
+const PT_REGIME_DE = {
+  ratioAfMax: 0.72,        // AF <= 72 % de (AF + PR)
+  plafondAfAnnuel: 1120,   // heures d'acte de formation par an
+  baseAnnuelle: 1565,      // heures annuelles de référence (1 600 h en régime général)
+  moyenneHebdoAf: 25.2,    // moyenne hebdomadaire d'acte de formation
+};
+
 function ptEchapperHtml(texte) {
   const div = document.createElement('div');
   div.textContent = texte ?? '';
@@ -322,12 +341,18 @@ function ptRenderActivitesMatinApresMidi(jour) {
   const apresMidi = activitesTriees.filter((a) => a.heure_debut && a.heure_debut.slice(0, 5) > seuil);
 
   const ligneActivite = (a) => {
-    const heure = a.heure_debut ? `${a.heure_debut.slice(0, 5)} — ` : '';
+    const heure = a.heure_debut
+      ? `${a.heure_debut.slice(0, 5)}${a.heure_fin ? `-${a.heure_fin.slice(0, 5)}` : ''} — `
+      : '';
     const categorie = PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite;
     const detail = a.formation_code
       ? ` (${ptEchapperHtml(ptLibelleFormation(a.formation_code))})`
       : a.centre_code ? ` (${ptEchapperHtml(ptLibelleCentre(a.centre_code))})` : '';
-    return `${heure}${categorie}${detail}`;
+    // Tâches saisies à la clôture du bloc (section 35 du mémoire).
+    const taches = (a.details && a.details.length)
+      ? ` : ${a.details.map((t) => ptEchapperHtml(t)).join(', ')}`
+      : '';
+    return `${heure}${categorie}${detail}${taches}`;
   };
 
   return `
@@ -341,6 +366,77 @@ const PT_LABELS_MOIS = [
   'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
   'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre',
 ];
+
+// --- Ventilation CCN : bloc HTML partagé par le récap du salarié (onglet
+// Suivi) et le récap RH admin — même tableau, mêmes chiffres, une seule
+// implémentation. `regimeActif` = profils.regime_formateur_de du salarié
+// concerné : il conditionne uniquement l'ajout du bloc de plafonds.
+function ptFormatHeures(valeur) {
+  return valeur.toFixed(2).replace('.', ',');
+}
+
+function ptDiversMois(m) {
+  return (m.heuresParCategorie.controle || 0)
+    + (m.heuresParCategorie.travaux_divers || 0)
+    + (m.heuresParCategorie.autre || 0);
+}
+
+function ptRenderVentilationCcnHtml(recap, regimeActif, annee) {
+  const ligne = (m, cellule) => `
+    <tr>
+      <${cellule}>${m.label}</${cellule}>
+      <${cellule}>${ptFormatHeures(m.heuresParCategorie.acte_formation || 0)}</${cellule}>
+      <${cellule}>${ptFormatHeures(m.heuresParCategorie.preparation_recherche || 0)}</${cellule}>
+      <${cellule}>${ptFormatHeures(m.heuresParCategorie.activite_connexe || 0)}</${cellule}>
+      <${cellule}>${ptFormatHeures(ptDiversMois(m))}</${cellule}>
+      <${cellule}>${ptFormatHeures(m.heuresNonVentilees)}</${cellule}>
+    </tr>`;
+
+  const tableau = `
+    <h3 class="pt-recap-mois-titre">Ventilation par catégorie (année ${annee})</h3>
+    <p class="pt-info">Catégories de la CCN IDCC 1516 : AF = action de formation, PR = préparation / administratif, AC = activité connexe. « Divers » regroupe contrôle, travaux divers et autre. « Non ventilé » = heures pointées qu'aucune activité datée ne couvre — à réduire en saisissant systématiquement l'activité au moment du pointage.</p>
+    <table class="pt-table-recap">
+      <thead>
+        <tr><th>Mois</th><th>AF</th><th>PR</th><th>AC</th><th>Divers</th><th>Non ventilé</th></tr>
+      </thead>
+      <tbody>${recap.mois.map((m) => ligne(m, 'td')).join('')}</tbody>
+      <tfoot>${ligne({ ...recap.total, label: '<strong>Total</strong>' }, 'th')}</tfoot>
+    </table>`;
+
+  if (!regimeActif) return tableau;
+
+  const d = recap.regimeDe;
+  const badge = (depasse) => (depasse
+    ? '<span class="pt-badge pt-badge-alerte">Dépassé</span>'
+    : '<span class="pt-badge pt-badge-ok">Dans la limite</span>');
+
+  return `${tableau}
+    <h3 class="pt-recap-mois-titre">Régime formateur D/E — plafonds du Titre IV</h3>
+    <p class="pt-info">Ce salarié est déclaré formateur D ou E (Administration &gt; Profils). Plafonds de l'accord RTT du 6 décembre 1999, Titre IV. Indicateurs calculés sur les heures ventilées de l'année affichée uniquement — un exercice incomplet donne donc des valeurs partielles.</p>
+    <table class="pt-table-admin">
+      <thead><tr><th>Indicateur</th><th>Constaté</th><th>Plafond</th><th>État</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Part d'action de formation (AF / AF+PR)</td>
+          <td>${d.ratioAf === null ? '—' : `${(d.ratioAf * 100).toFixed(1).replace('.', ',')} %`}</td>
+          <td>${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} %</td>
+          <td>${d.ratioAf === null ? '—' : badge(d.ratioDepasse)}</td>
+        </tr>
+        <tr>
+          <td>Heures d'action de formation</td>
+          <td>${ptFormatHeures(d.af)} h</td>
+          <td>${PT_REGIME_DE.plafondAfAnnuel} h/an</td>
+          <td>${badge(d.plafondAfDepasse)}</td>
+        </tr>
+        <tr>
+          <td>Total des heures travaillées</td>
+          <td>${ptFormatHeures(recap.total.heures)} h</td>
+          <td>${PT_REGIME_DE.baseAnnuelle} h/an</td>
+          <td>${badge(d.baseAnnuelleDepassee)}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
 
 async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
   zoneContenu.innerHTML = `<p>Calcul en cours…</p>`;
@@ -380,7 +476,8 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
           <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
         </tr>
       </tfoot>
-    </table>`;
+    </table>
+    ${ptRenderVentilationCcnHtml(recap, Boolean(S.profil.regime_formateur_de), S.suiviAnnee)}`;
 
   document.getElementById('pt-annee-prec').addEventListener('click', () => {
     S.suiviAnnee -= 1;
@@ -392,6 +489,75 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
   });
   document.getElementById('pt-btn-recap-pdf').addEventListener('click', () => ptExporterRecapPdf(recap, S.suiviAnnee));
   document.getElementById('pt-btn-recap-excel').addEventListener('click', () => ptExporterRecapExcel(recap, S.suiviAnnee));
+}
+
+// --- Lignes de la ventilation CCN pour les exports (PDF et Excel, récap
+// salarié et récap RH) — une seule source, comme pour l'affichage.
+function ptLignesVentilationPdf(recap) {
+  const ligne = (m) => [
+    m.label,
+    ptFormatHeures(m.heuresParCategorie.acte_formation || 0),
+    ptFormatHeures(m.heuresParCategorie.preparation_recherche || 0),
+    ptFormatHeures(m.heuresParCategorie.activite_connexe || 0),
+    ptFormatHeures(ptDiversMois(m)),
+    ptFormatHeures(m.heuresNonVentilees),
+  ];
+  return {
+    body: recap.mois.map(ligne),
+    foot: [ligne({ ...recap.total, label: 'Total' })],
+  };
+}
+
+function ptLignesVentilationExcel(recap) {
+  const ligne = (m) => ({
+    Mois: m.label,
+    'AF (action de formation)': Number((m.heuresParCategorie.acte_formation || 0).toFixed(2)),
+    'PR (préparation)': Number((m.heuresParCategorie.preparation_recherche || 0).toFixed(2)),
+    'AC (activité connexe)': Number((m.heuresParCategorie.activite_connexe || 0).toFixed(2)),
+    Divers: Number(ptDiversMois(m).toFixed(2)),
+    'Non ventilé': Number(m.heuresNonVentilees.toFixed(2)),
+  });
+  return [...recap.mois.map(ligne), ligne({ ...recap.total, label: 'Total' })];
+}
+
+function ptLignesRegimeDe(recap) {
+  const d = recap.regimeDe;
+  const etat = (depasse) => (depasse ? 'Dépassé' : 'Dans la limite');
+  return [
+    ["Part d'action de formation (AF / AF+PR)",
+      d.ratioAf === null ? '—' : `${(d.ratioAf * 100).toFixed(1).replace('.', ',')} %`,
+      `${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} %`,
+      d.ratioAf === null ? '—' : etat(d.ratioDepasse)],
+    ["Heures d'action de formation",
+      `${ptFormatHeures(d.af)} h`,
+      `${PT_REGIME_DE.plafondAfAnnuel} h/an`,
+      etat(d.plafondAfDepasse)],
+    ['Total des heures travaillées',
+      `${ptFormatHeures(recap.total.heures)} h`,
+      `${PT_REGIME_DE.baseAnnuelle} h/an`,
+      etat(d.baseAnnuelleDepassee)],
+  ];
+}
+
+// Ajoute au document PDF la ventilation CCN puis, si le salarié y est
+// assujetti, les plafonds du Titre IV. Renvoie le document pour la forme.
+function ptAjouterVentilationPdf(doc, recap, regimeActif) {
+  const ventilation = ptLignesVentilationPdf(recap);
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 10,
+    head: [['Mois', 'AF', 'PR', 'AC', 'Divers', 'Non ventilé']],
+    body: ventilation.body,
+    foot: ventilation.foot,
+    styles: { fontSize: 8 },
+  });
+  if (!regimeActif) return doc;
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 8,
+    head: [['Régime formateur D/E', 'Constaté', 'Plafond', 'État']],
+    body: ptLignesRegimeDe(recap),
+    styles: { fontSize: 8 },
+  });
+  return doc;
 }
 
 // --- Export du récap annuel (reprend l'onglet "Récap Annuel" du fichier
@@ -420,6 +586,7 @@ function ptExporterRecapPdf(recap, annee) {
     ]],
     styles: { fontSize: 9 },
   });
+  ptAjouterVentilationPdf(doc, recap, Boolean(S.profil.regime_formateur_de));
   doc.save(`recap_${annee}_${S.profil.nom}.pdf`);
 }
 
@@ -438,9 +605,9 @@ function ptExporterRecapExcel(recap, annee) {
     'RTT pris (j)': recap.total.rttPrisJours,
     'RTT dispo (h)': Number(recap.total.rttDispoHeures.toFixed(2)),
   });
-  const feuille = XLSX.utils.json_to_sheet(lignes);
   const classeur = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(classeur, feuille, `Récap ${annee}`);
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignes), `Récap ${annee}`);
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesVentilationExcel(recap)), 'Ventilation CCN');
   XLSX.writeFile(classeur, `recap_${annee}_${S.profil.nom}.xlsx`);
 }
 
@@ -459,7 +626,7 @@ async function ptChargerHistoriqueSuivi(nbJours) {
       .order('moment', { ascending: true }),
     ptSupabase
       .from('activites')
-      .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire')
+      .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', S.session.user.id)
       .gte('date', dateDebutIso),
   ]);
@@ -507,6 +674,119 @@ function ptFormatDateCourte(dateIso) {
   return new Date(`${dateIso}T00:00:00`).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+// --- Ventilation des heures par catégorie CCN (AF / PR / AC) -------------
+// Les activités sont enregistrées avec une heure de début mais, depuis la
+// fusion pointage/activité (mémoire, sections 28/29), sans heure de fin. La
+// durée d'une activité se déduit donc du contexte : elle court jusqu'à
+// l'activité suivante, ou jusqu'à la fin du bloc de travail dans lequel elle
+// commence (pause méridienne ou fin de journée). C'est fiable parce que la
+// fusion garantit exactement une activité par bloc de travail.
+
+// Bornes des blocs de travail réels d'une journée, en millisecondes :
+// [arrivée -> début de pause] et [fin de pause -> départ], ou un bloc unique
+// si aucune pause méridienne n'a été pointée. Journée incomplète = aucun
+// bloc, cohérent avec ptCalculerHeuresJour qui ne compte pas ces jours-là.
+function ptBlocsTravailJour(horodatagesJour) {
+  const trouver = (type) => horodatagesJour.find((h) => h.type_horodatage === type);
+  const arrivee = trouver('arrivee');
+  const depart = trouver('depart');
+  if (!arrivee || !depart) return [];
+
+  const ms = (h) => new Date(h.moment).getTime();
+  const pauseDebut = trouver('pause_debut');
+  const pauseFin = trouver('pause_fin');
+  if (pauseDebut && pauseFin) {
+    return [[ms(arrivee), ms(pauseDebut)], [ms(pauseFin), ms(depart)]];
+  }
+  return [[ms(arrivee), ms(depart)]];
+}
+
+function ptMsHeureDuJour(dateIso, heure) {
+  if (!heure) return null;
+  const valeur = new Date(`${dateIso}T${heure}`).getTime();
+  return Number.isNaN(valeur) ? null : valeur;
+}
+
+// Renvoie { parCategorie: { type_activite: heures }, heuresVentilees }.
+// Une activité sans heure de début ne peut pas être placée dans un bloc :
+// elle est ignorée ici et ressort dans les heures "non ventilées" du récap
+// (heures pointées moins heures ventilées), plutôt que d'être attribuée
+// arbitrairement à une catégorie.
+function ptVentilerHeuresJour(horodatagesJour, activitesJour) {
+  const parCategorie = {};
+  const blocs = ptBlocsTravailJour(horodatagesJour);
+  if (!blocs.length) return { parCategorie, heuresVentilees: 0 };
+
+  const activites = activitesJour
+    .map((a) => ({
+      type: a.type_activite,
+      debutMs: ptMsHeureDuJour(a.date, a.heure_debut),
+      finMs: ptMsHeureDuJour(a.date, a.heure_fin),
+    }))
+    .filter((a) => a.debutMs !== null)
+    .sort((x, y) => x.debutMs - y.debutMs);
+
+  // Curseur : une activité ne peut pas empiéter sur la précédente. Protège
+  // du double comptage si deux activités portent la même heure de début
+  // (double saisie), ce qui gonflerait le total ventilé au-delà des heures
+  // réellement pointées.
+  let curseur = 0;
+
+  for (let i = 0; i < activites.length; i += 1) {
+    const activite = activites[i];
+    // Bloc dans lequel l'activité commence ; à défaut (activité saisie juste
+    // avant l'arrivée pointée), le premier bloc qui n'est pas déjà terminé.
+    const blocDeDepart = blocs.find(([debut, fin]) => activite.debutMs >= debut && activite.debutMs < fin)
+      || blocs.find(([, fin]) => activite.debutMs < fin);
+    if (!blocDeDepart) continue;
+
+    // Fin de l'activité. Sans heure de fin saisie, on s'arrête volontairement
+    // au bout du bloc de départ : prolonger jusqu'au soir attribuerait des
+    // heures d'après-midi à une catégorie que le salarié n'a pas confirmée.
+    // Sous-estimer se voit dans la colonne "non ventilé" ; surestimer
+    // fausserait silencieusement les plafonds du régime D/E.
+    let fin = activite.finMs ?? blocDeDepart[1];
+    const suivante = activites[i + 1];
+    if (suivante && suivante.debutMs > activite.debutMs && suivante.debutMs < fin) {
+      fin = suivante.debutMs;
+    }
+
+    // Intersection avec chaque bloc de travail : une activité dont l'heure de
+    // fin a été saisie de part et d'autre de la pause méridienne compte sur
+    // les deux blocs, sans jamais compter la pause elle-même.
+    for (const [blocDebut, blocFin] of blocs) {
+      const debutEffectif = Math.max(activite.debutMs, blocDebut, curseur);
+      const finEffective = Math.min(fin, blocFin);
+      if (finEffective <= debutEffectif) continue;
+      parCategorie[activite.type] = (parCategorie[activite.type] || 0)
+        + (finEffective - debutEffectif) / 3_600_000;
+    }
+    curseur = Math.max(curseur, fin);
+  }
+
+  const heuresVentilees = Object.values(parCategorie).reduce((somme, v) => somme + v, 0);
+  return { parCategorie, heuresVentilees };
+}
+
+// Indicateurs du Titre IV, calculés à partir du total annuel ventilé. Le
+// ratio ne porte que sur AF et PR (les catégories propres à BFS — contrôle,
+// travaux divers, autre — n'entrent pas dans ce rapport conventionnel).
+function ptIndicateursRegimeDe(total) {
+  const af = total.heuresParCategorie.acte_formation || 0;
+  const pr = total.heuresParCategorie.preparation_recherche || 0;
+  const ac = total.heuresParCategorie.activite_connexe || 0;
+  const baseRatio = af + pr;
+  return {
+    af,
+    pr,
+    ac,
+    ratioAf: baseRatio > 0 ? af / baseRatio : null,
+    ratioDepasse: baseRatio > 0 && af / baseRatio > PT_REGIME_DE.ratioAfMax,
+    plafondAfDepasse: af > PT_REGIME_DE.plafondAfAnnuel,
+    baseAnnuelleDepassee: total.heures > PT_REGIME_DE.baseAnnuelle,
+  };
+}
+
 // --- Récap annuel/mensuel (heures, jours de déplacement, RTT) ------------
 const PT_HEURES_JOUR_RTT = 7; // conversion jours -> heures pour les RTT pris (approximation documentée)
 
@@ -535,7 +815,7 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   const debutAnnee = `${annee}-01-01`;
   const finAnnee = `${annee}-12-31`;
 
-  const [horodatagesRes, deplacementsRes, congesRes, trajetsRes] = await Promise.all([
+  const [horodatagesRes, deplacementsRes, congesRes, trajetsRes, activitesRes] = await Promise.all([
     ptSupabase.from('horodatages').select('date, moment, type_horodatage')
       .eq('technicien_id', technicienId)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
@@ -554,8 +834,13 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
       .eq('technicien_id', technicienId)
       .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .order('moment', { ascending: true }),
+    // Activités de l'année : servent à ventiler les heures par catégorie CCN
+    // (AF/PR/AC), et donc aux plafonds du régime formateur D/E.
+    ptSupabase.from('activites').select('date, type_activite, heure_debut, heure_fin')
+      .eq('technicien_id', technicienId)
+      .gte('date', debutAnnee).lte('date', finAnnee),
   ]);
-  for (const res of [horodatagesRes, deplacementsRes, congesRes, trajetsRes]) {
+  for (const res of [horodatagesRes, deplacementsRes, congesRes, trajetsRes, activitesRes]) {
     if (res.error) throw res.error;
   }
 
@@ -574,6 +859,16 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   // exclusion des jours de déplacement...) pas encore tranchée avec Jeremy,
   // affiché comme un simple décompte de jours pointés pour l'instant.
   const joursTravaillesSet = new Set(horodatagesRes.data.filter((h) => h.type_horodatage === 'arrivee').map((h) => h.date));
+
+  // 1ter. Ventilation des heures par catégorie CCN, jour par jour. Calculée
+  // une seule fois ici puis agrégée par mois dans la boucle ci-dessous.
+  const ventilationParJour = {};
+  for (const dateIso of joursUniques) {
+    ventilationParJour[dateIso] = ptVentilerHeuresJour(
+      horodatagesRes.data.filter((h) => h.date === dateIso),
+      activitesRes.data.filter((a) => a.date === dateIso),
+    );
+  }
 
   // 2. Jours de déplacement : nuitées manuelles (deplacements) + nuits
   // inter-agence calculées automatiquement, sur l'ensemble de l'historique
@@ -625,10 +920,17 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
     const dernierJourMois = new Date(annee, m + 1, 0);
 
     let heuresMois = 0;
+    const heuresParCategorieMois = {};
+    let heuresVentileesMois = 0;
     for (const dateIso of joursUniques) {
       const d = new Date(`${dateIso}T00:00:00`);
       if (d >= premierJourMois && d <= dernierJourMois) {
         heuresMois += ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
+        const ventilation = ventilationParJour[dateIso];
+        for (const [categorie, heures] of Object.entries(ventilation.parCategorie)) {
+          heuresParCategorieMois[categorie] = (heuresParCategorieMois[categorie] || 0) + heures;
+        }
+        heuresVentileesMois += ventilation.heuresVentilees;
       }
     }
 
@@ -667,6 +969,11 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
       joursTravailles: joursTravaillesMois,
       ticketsResto: ticketsRestoMois,
       congesParType: congesParTypeMois,
+      heuresParCategorie: heuresParCategorieMois,
+      // Heures pointées qu'aucune activité ne couvre (activité sans heure de
+      // début, ou saisie antérieure à la fusion pointage/activité). Jamais
+      // négatif : un arrondi ne doit pas produire une ligne aberrante.
+      heuresNonVentilees: Math.max(heuresMois - heuresVentileesMois, 0),
     });
   }
 
@@ -687,7 +994,19 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   }
   total.congesParType = congesParTypeTotal;
 
-  return { mois, total };
+  // Ventilation cumulée sur l'année (somme des douze mois).
+  const heuresParCategorieTotal = {};
+  let heuresNonVentileesTotal = 0;
+  for (const m of mois) {
+    for (const [categorie, heures] of Object.entries(m.heuresParCategorie)) {
+      heuresParCategorieTotal[categorie] = (heuresParCategorieTotal[categorie] || 0) + heures;
+    }
+    heuresNonVentileesTotal += m.heuresNonVentilees;
+  }
+  total.heuresParCategorie = heuresParCategorieTotal;
+  total.heuresNonVentilees = heuresNonVentileesTotal;
+
+  return { mois, total, regimeDe: ptIndicateursRegimeDe(total) };
 }
 
 function ptJourPrecedent(dateIso) {
@@ -1145,8 +1464,9 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
 
   zoneContenu.innerHTML = `
     <p class="pt-info">Rôle, agence de rattachement (sert au calcul automatique des nuits inter-agence) et statut actif/inactif. Chaque changement est enregistré immédiatement.</p>
+    <p class="pt-info">Régime D/E : à cocher pour un salarié classé formateur D ou E (CCN IDCC 1516, accord RTT du 06/12/1999, Titre IV). Sa ventilation horaire est alors comparée aux plafonds du Titre IV : part d'action de formation limitée à ${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} % de AF+PR, ${PT_REGIME_DE.plafondAfAnnuel} h d'action de formation par an, base annuelle de ${PT_REGIME_DE.baseAnnuelle} h. Décoché = régime général (1 600 h, RTT 35-39 h).</p>
     <table class="pt-table-admin">
-      <thead><tr><th>Nom</th><th>Rôle</th><th>Agence</th><th>Actif</th></tr></thead>
+      <thead><tr><th>Nom</th><th>Rôle</th><th>Agence</th><th>Régime D/E</th><th>Actif</th></tr></thead>
       <tbody>
         ${data.map((p) => `
           <tr>
@@ -1162,6 +1482,9 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
                 <option value="BFS_85" ${p.agence_rattachement === 'BFS_85' ? 'selected' : ''}>BFS 85</option>
                 <option value="BFS_29" ${p.agence_rattachement === 'BFS_29' ? 'selected' : ''}>BFS 29</option>
               </select>
+            </td>
+            <td>
+              <input type="checkbox" class="pt-profil-regime-de" data-id="${p.id}" ${p.regime_formateur_de ? 'checked' : ''} title="Formateur D/E (CCN IDCC 1516, Titre IV)" />
             </td>
             <td>
               <input type="checkbox" class="pt-profil-actif" data-id="${p.id}" ${p.actif ? 'checked' : ''} />
@@ -1188,6 +1511,17 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
     select.addEventListener('change', async () => {
       try { await ptModifierProfil(select.dataset.id, { agence_rattachement: select.value || null }); }
       catch (erreur) { gererErreur(erreur); }
+    });
+  });
+  zoneContenu.querySelectorAll('.pt-profil-regime-de').forEach((checkbox) => {
+    checkbox.addEventListener('change', async () => {
+      try {
+        await ptModifierProfil(checkbox.dataset.id, { regime_formateur_de: checkbox.checked });
+        // Si l'admin modifie son propre régime, rafraîchir S.profil pour que
+        // son propre onglet Suivi affiche (ou masque) les plafonds sans avoir
+        // à recharger la page.
+        if (checkbox.dataset.id === S.session.user.id) await ptChargerProfil();
+      } catch (erreur) { gererErreur(erreur); }
     });
   });
   zoneContenu.querySelectorAll('.pt-profil-actif').forEach((checkbox) => {
@@ -1257,7 +1591,9 @@ async function ptModifierParametre(cle, valeur) {
 // seulement l'administratif applicatif.
 async function ptRenderAdminRh(zoneContenu, conteneur) {
   zoneContenu.innerHTML = `<p>Chargement…</p>`;
-  const { data: profils, error } = await ptSupabase.from('profils').select('id, nom, prenom').order('nom');
+  // regime_formateur_de est chargé ici pour conditionner l'affichage des
+  // plafonds du Titre IV au salarié sélectionné (et non à l'admin connecté).
+  const { data: profils, error } = await ptSupabase.from('profils').select('id, nom, prenom, regime_formateur_de').order('nom');
   if (error) throw error;
   if (!profils.length) {
     zoneContenu.innerHTML = '<p class="pt-liste-vide">Aucun salarié.</p>';
@@ -1334,7 +1670,8 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
         ${Object.entries(PT_LABELS_CONGE).map(([type, label]) => `
           <tr><td>${label}</td><td>${recap.total.congesParType[type] || 0}</td></tr>`).join('')}
       </tbody>
-    </table>`;
+    </table>
+    ${ptRenderVentilationCcnHtml(recap, Boolean(technicien.regime_formateur_de), S.adminRhAnnee)}`;
 
   document.getElementById('pt-rh-annee-prec').addEventListener('click', () => {
     S.adminRhAnnee -= 1;
@@ -1344,11 +1681,12 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
     S.adminRhAnnee += 1;
     ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien);
   });
-  document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee));
-  document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee));
+  const regimeActif = Boolean(technicien.regime_formateur_de);
+  document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee, regimeActif));
+  document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee, regimeActif));
 }
 
-function ptExporterRecapRhPdf(recap, nomPrenom, annee) {
+function ptExporterRecapRhPdf(recap, nomPrenom, annee, regimeActif = false) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
   doc.setFontSize(14);
@@ -1385,10 +1723,11 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee) {
     body: Object.entries(PT_LABELS_CONGE).map(([type, label]) => [label, String(recap.total.congesParType[type] || 0)]),
     styles: { fontSize: 9 },
   });
+  ptAjouterVentilationPdf(doc, recap, regimeActif);
   doc.save(`recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.pdf`);
 }
 
-function ptExporterRecapRhExcel(recap, nomPrenom, annee) {
+function ptExporterRecapRhExcel(recap, nomPrenom, annee, regimeActif = false) {
   const lignesMois = recap.mois.map((m) => ({
     Mois: m.label,
     Heures: Number(m.heures.toFixed(2)),
@@ -1415,6 +1754,13 @@ function ptExporterRecapRhExcel(recap, nomPrenom, annee) {
   const classeur = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesMois), 'Récap mensuel');
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesConges), 'Congés par type');
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesVentilationExcel(recap)), 'Ventilation CCN');
+  if (regimeActif) {
+    const lignesRegime = ptLignesRegimeDe(recap).map(([indicateur, constate, plafond, etat]) => ({
+      Indicateur: indicateur, Constaté: constate, Plafond: plafond, État: etat,
+    }));
+    XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesRegime), 'Régime D-E');
+  }
   XLSX.writeFile(classeur, `recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.xlsx`);
 }
 
@@ -1673,7 +2019,13 @@ async function ptRenderSecretariatPointages(zoneContenu, conteneur) {
 }
 
 async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) {
-  const { horodatages, activites } = await ptChargerHistoriquePointageTechnicien(S.secretariatTechnicienId, S.secretariatNbJours);
+  // Centres et formations nécessaires pour résoudre les libellés affichés
+  // par ptRenderActivitesMatinApresMidi (même rendu que l'onglet Suivi).
+  const [{ horodatages, activites }] = await Promise.all([
+    ptChargerHistoriquePointageTechnicien(S.secretariatTechnicienId, S.secretariatNbJours),
+    ptChargerCentres(),
+    ptChargerFormations(),
+  ]);
   const jours = ptRegrouperParJour(horodatages, activites, S.secretariatNbJours);
 
   zoneListe.innerHTML = `
@@ -1692,9 +2044,7 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
           ${j.horodatages.length > 0
             ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
             : ''}
-          ${j.activites.length > 0
-            ? `<div class="pt-jour-suivi-details">Activités : ${j.activites.map((a) => PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite).join(', ')}</div>`
-            : ''}
+          ${ptRenderActivitesMatinApresMidi(j)}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-secretariat-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
@@ -1716,7 +2066,10 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
-    ptSupabase.from('activites').select('date, type_activite')
+    // Mêmes colonnes que ptChargerHistoriqueSuivi : le secrétariat voit le
+    // même détail matin/après-midi et les mêmes tâches que le salarié.
+    ptSupabase.from('activites')
+      .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', technicienId)
       .gte('date', dateDebutIso),
   ]);
@@ -1734,6 +2087,7 @@ async function ptRenderOngletPointage(conteneur) {
     ptChargerFormations(),
     ptChargerDeplacementsRecents(),
     ptChargerHorodatagesTrajetTous(),
+    ptChargerActiviteBlocEnCours(),
   ]);
 
   const horodatagesPrincipaux = S.horodatagesJour.filter((h) => h.type_horodatage in PT_TYPES_HORODATAGE);
@@ -1750,6 +2104,14 @@ async function ptRenderOngletPointage(conteneur) {
   // dès qu'il n'y avait qu'une seule activité par bloc — la saisie passe
   // désormais uniquement par ce formulaire fusionné.
   const demarrageBlocTravail = Boolean(prochaine) && (prochaine.type === 'arrivee' || prochaine.type === 'pause_fin');
+  // Symétrique de la fusion ci-dessus (demande Jeremy, 2026-08-25) : à la
+  // clôture d'un bloc — début de pause méridienne OU fin de journée — le
+  // salarié détaille ce qu'il a réellement fait. Au démarrage il ne le sait
+  // pas encore, à la clôture si. Le détail est obligatoire, sauf pour une
+  // action de formation où la formation sélectionnée décrit déjà le bloc.
+  const clotureBlocTravail = Boolean(prochaine) && (prochaine.type === 'pause_debut' || prochaine.type === 'depart');
+  const activiteBloc = S.activiteBlocEnCours;
+  const clotureAvecTaches = clotureBlocTravail && Boolean(activiteBloc) && activiteBloc.type_activite !== 'acte_formation';
   // Bug corrigé (2026-08-06, section 25 du mémoire) : le bouton trajet
   // inter-agence doit regarder tout l'historique récent (S.horodatagesTrajetTous,
   // déjà chargé pour le calcul des séjours), pas seulement les pointages du
@@ -1802,7 +2164,18 @@ async function ptRenderOngletPointage(conteneur) {
                  <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
                  <button type="submit" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>
                </form>`
-            : `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`)
+            : clotureAvecTaches
+              ? `<form id="pt-form-cloture-bloc" class="pt-form-activite">
+                   <p class="pt-info">Avant de pointer, précise ce que tu as fait depuis ${activiteBloc.heure_debut ? ptEchapperHtml(activiteBloc.heure_debut.slice(0, 5)) : 'le début du bloc'} (${ptEchapperHtml(PT_LABELS_ACTIVITE[activiteBloc.type_activite] || activiteBloc.type_activite)}). Ajoute autant de lignes que nécessaire.</p>
+                   <div class="pt-tache-ajout">
+                     <input type="text" id="pt-tache-saisie" maxlength="150" placeholder="Ex. nettoyage engins" />
+                     <button type="button" id="pt-btn-ajouter-tache" class="pt-btn pt-btn-secondaire pt-btn-petit">Ajouter</button>
+                   </div>
+                   <ul id="pt-taches-liste" class="pt-liste-taches"></ul>
+                   <p id="pt-cloture-erreur" class="pt-message-erreur" hidden></p>
+                   <button type="submit" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>
+                 </form>`
+              : `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`)
         : `<p class="pt-info">Journée déjà bouclée. Utilise la saisie manuelle ci-dessous si besoin d'une correction.</p>`}
 
       <button id="pt-btn-saisie-manuelle" class="pt-btn pt-btn-secondaire pt-btn-petit">Saisir un horodatage manquant</button>
@@ -1890,12 +2263,86 @@ async function ptRenderOngletPointage(conteneur) {
         boutonSubmit.disabled = false;
       }
     });
+  } else if (clotureAvecTaches) {
+    const formCloture = document.getElementById('pt-form-cloture-bloc');
+    const champTache = document.getElementById('pt-tache-saisie');
+    const listeTaches = document.getElementById('pt-taches-liste');
+    const erreurCloture = document.getElementById('pt-cloture-erreur');
+    // Copie : on ne modifie S.activiteBlocEnCours qu'une fois l'enregistrement
+    // réussi (le rendu est relancé derrière et rechargera la valeur réelle).
+    const taches = [...(activiteBloc.details || [])];
+
+    const rendreTaches = () => {
+      listeTaches.innerHTML = taches.length
+        ? taches.map((tache, index) => `<li>${ptEchapperHtml(tache)} <button type="button" class="pt-tache-retirer" data-index="${index}" title="Retirer cette tâche">✕</button></li>`).join('')
+        : '<li class="pt-liste-vide">Aucune tâche ajoutée pour l\'instant.</li>';
+      listeTaches.querySelectorAll('.pt-tache-retirer').forEach((bouton) => {
+        bouton.addEventListener('click', () => {
+          taches.splice(Number(bouton.dataset.index), 1);
+          rendreTaches();
+        });
+      });
+    };
+
+    const ajouterTache = () => {
+      const valeur = champTache.value.trim();
+      if (!valeur) return;
+      taches.push(valeur);
+      champTache.value = '';
+      erreurCloture.hidden = true;
+      rendreTaches();
+      champTache.focus();
+    };
+
+    rendreTaches();
+    document.getElementById('pt-btn-ajouter-tache').addEventListener('click', ajouterTache);
+    // Entrée dans le champ = ajouter une tâche, surtout pas soumettre le
+    // formulaire (ce qui pointerait la pause par accident).
+    champTache.addEventListener('keydown', (evenement) => {
+      if (evenement.key !== 'Enter') return;
+      evenement.preventDefault();
+      ajouterTache();
+    });
+
+    formCloture.addEventListener('submit', async (evenement) => {
+      evenement.preventDefault();
+      // Tolérance : une tâche tapée mais pas encore validée par "Ajouter" ne
+      // doit pas être perdue au moment de pointer.
+      if (champTache.value.trim()) ajouterTache();
+      if (!taches.length) {
+        erreurCloture.textContent = 'Ajoute au moins une tâche avant de pointer.';
+        erreurCloture.hidden = false;
+        champTache.focus();
+        return;
+      }
+      const boutonSubmit = formCloture.querySelector('button[type="submit"]');
+      boutonSubmit.disabled = true;
+      try {
+        // Les tâches d'abord : si le pointage échoue, le détail est déjà
+        // enregistré et le salarié peut repointer sans tout resaisir.
+        await ptCloturerBlocActivite(activiteBloc.id, taches);
+        await ptEnregistrerHorodatage(prochaine.type);
+        ptRenderOngletPointage(conteneur);
+      } catch (erreur) {
+        erreurCloture.textContent = 'Échec de l\'enregistrement. Réessaie.';
+        erreurCloture.hidden = false;
+        PT_DEBUG.log(`Échec de la clôture de bloc : ${erreur.message}`, true);
+        boutonSubmit.disabled = false;
+      }
+    });
   } else {
     const boutonPointer = document.getElementById('pt-btn-pointer');
     if (boutonPointer) {
       boutonPointer.addEventListener('click', async () => {
         boutonPointer.disabled = true;
         try {
+          // Clôture d'un bloc d'action de formation (ou bloc sans activité
+          // rattachée) : pas de tâches à saisir, mais l'heure de fin est
+          // renseignée quand même pour que la ventilation horaire soit
+          // exacte plutôt que déduite.
+          if (clotureBlocTravail && activiteBloc) {
+            await ptCloturerBlocActivite(activiteBloc.id, activiteBloc.details || []);
+          }
           await ptEnregistrerHorodatage(prochaine.type);
           ptRenderOngletPointage(conteneur);
         } catch (erreur) {
@@ -2097,6 +2544,36 @@ async function ptChargerHorodatagesJour() {
     .order('moment', { ascending: true });
   if (error) throw error;
   S.horodatagesJour = data;
+}
+
+// --- Clôture d'un bloc de travail : détail des tâches réalisées ----------
+// L'activité du bloc en cours est celle du jour dont l'heure de fin n'est
+// pas encore renseignée (une seule à la fois, la fusion pointage/activité
+// garantissant une activité par bloc). Sert au formulaire de clôture affiché
+// avant la pause méridienne et avant la fin de journée.
+async function ptChargerActiviteBlocEnCours() {
+  const { data, error } = await ptSupabase
+    .from('activites')
+    .select('id, type_activite, formation_code, centre_code, commentaire, details, heure_debut')
+    .eq('technicien_id', S.session.user.id)
+    .eq('date', ptDateDuJour())
+    .is('heure_fin', null)
+    .order('heure_debut', { ascending: false })
+    .limit(1);
+  if (error) throw error;
+  S.activiteBlocEnCours = data[0] || null;
+  return S.activiteBlocEnCours;
+}
+
+// Renseigne les tâches ET l'heure de fin du bloc. L'heure de fin rend la
+// ventilation horaire AF/PR/AC exacte au lieu d'être déduite du contexte
+// (cf. ptVentilerHeuresJour, MEMOIRE_PROJET.md section 34).
+async function ptCloturerBlocActivite(id, details) {
+  const { error } = await ptSupabase
+    .from('activites')
+    .update({ details, heure_fin: new Date().toTimeString().slice(0, 5) })
+    .eq('id', id);
+  if (error) throw error;
 }
 
 async function ptAjouterActivite(champs) {

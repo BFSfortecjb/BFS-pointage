@@ -23,6 +23,7 @@ const S = {
   formations: [],
   deplacementsRecents: [],
   horodatagesTrajetTous: [],
+  activiteBlocEnCours: null, // activité du bloc en cours (heure_fin non renseignée), à détailler à la clôture
   suiviNbJours: 14,
   suiviHorodatages: [],
   suiviActivites: [],
