@@ -1915,6 +1915,22 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
   zoneContenu.innerHTML = `
     <p class="pt-info">Rôle, agence de rattachement (sert au calcul automatique des nuits inter-agence) et statut actif/inactif. Chaque changement est enregistré immédiatement.</p>
     <p class="pt-info">Coefficient : celui qui figure au contrat de travail et sur le bulletin de paie. Il détermine le statut affiché (seuils modifiables dans Paramètres) et, pour un non-cadre, l'affichage des plafonds d'acte de formation dans le Récap RH — part d'action de formation limitée à ${(PT_REGIME_DE.ratioAfMax * 100).toFixed(0)} % de AF+PR, ${PT_REGIME_DE.plafondAfAnnuel} h par an, base annuelle de ${PT_REGIME_DE.baseAnnuelle} h. Laissé vide, aucun plafond n'est affiché.</p>
+
+    <form id="pt-form-rattacher-profil" class="pt-form-activite">
+      <label>Rattacher un compte existant (email)
+        <input type="email" name="email" placeholder="prenom@bfs-prevention.fr" required />
+      </label>
+      <label>Rôle initial
+        <select name="role">
+          ${Object.entries(PT_LABELS_ROLE).map(([v, l]) => `<option value="${v}" ${v === 'technicien' ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <button type="submit" class="pt-btn pt-btn-petit">Rattacher</button>
+      <p class="pt-info-inline">Pour un compte déjà créé dans une autre brique Univers BFS (Contrôle, Portail…) mais pas encore accessible ici. Un compte qui n'existe encore dans aucune brique doit d'abord être créé dans Authentication.</p>
+      <p id="pt-rattacher-erreur" class="pt-message-erreur" hidden></p>
+      <p id="pt-rattacher-succes" class="pt-message-succes" hidden></p>
+    </form>
+
     <table class="pt-table-admin">
       <thead><tr><th>Nom</th><th>Rôle</th><th>Agence</th><th>Coefficient</th><th>Statut</th><th>Actif</th></tr></thead>
       <tbody>
@@ -1951,6 +1967,29 @@ async function ptRenderAdminProfils(zoneContenu, conteneur) {
     erreurEl.hidden = false;
     PT_DEBUG.log(`Échec modification profil : ${erreur.message}`, true);
   };
+
+  document.getElementById('pt-form-rattacher-profil').addEventListener('submit', async (evenement) => {
+    evenement.preventDefault();
+    const formulaire = new FormData(evenement.target);
+    const boutonEnvoyer = evenement.target.querySelector('button[type="submit"]');
+    const erreurEl = document.getElementById('pt-rattacher-erreur');
+    const succesEl = document.getElementById('pt-rattacher-succes');
+    erreurEl.hidden = true;
+    succesEl.hidden = true;
+    boutonEnvoyer.disabled = true;
+    try {
+      const profil = await ptRattacherProfil(formulaire.get('email'), formulaire.get('role'));
+      succesEl.textContent = `${profil.prenom || profil.nom} rattaché(e) à Pointage (${PT_LABELS_ROLE[profil.role] || profil.role}).`;
+      succesEl.hidden = false;
+      evenement.target.reset();
+      ptRenderAdminProfils(zoneContenu, conteneur);
+    } catch (erreur) {
+      erreurEl.textContent = erreur.message || 'Échec du rattachement.';
+      erreurEl.hidden = false;
+      PT_DEBUG.log(`Échec rattachement profil : ${erreur.message}`, true);
+      boutonEnvoyer.disabled = false;
+    }
+  });
 
   zoneContenu.querySelectorAll('.pt-profil-role').forEach((select) => {
     select.addEventListener('change', async () => {
@@ -2000,6 +2039,20 @@ function ptLibelleStatutCoefficient(coefficient) {
 async function ptModifierProfil(id, champs) {
   const { error } = await ptSupabase.from('profils').update(champs).eq('id', id);
   if (error) throw error;
+}
+
+// Rattache à Pointage un compte auth.users déjà existant (créé pour une
+// autre brique Univers BFS), par email — voir MEMOIRE_PROJET.md section 44.
+// La fonction Postgres est SECURITY DEFINER et vérifie elle-même le rôle
+// admin ; l'erreur qu'elle lève (compte introuvable, rôle non admin...)
+// remonte telle quelle dans erreur.message.
+async function ptRattacherProfil(email, role) {
+  const { data, error } = await ptSupabase.rpc('rattacher_profil_par_email', {
+    p_email: email,
+    p_role: role,
+  });
+  if (error) throw error;
+  return data;
 }
 
 // --- Paramètres globaux (geoloc, comptage des heures de trajet par mode) —
