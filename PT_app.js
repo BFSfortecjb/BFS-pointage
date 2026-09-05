@@ -764,8 +764,7 @@ function ptLigneHorodatageEditable(h, dateIso, suivant, activitesAssociees = [])
         </label>
         <label class="pt-edition-activite-formation-champ">Formation
           <select name="formation_code">
-            <option value="">—</option>
-            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+            ${ptOptionsFormations('')}
           </select>
         </label>
         <label>Centre
@@ -802,8 +801,7 @@ function ptLigneActiviteEditable(a) {
         </label>
         <label class="pt-edition-activite-formation-champ">Formation
           <select name="formation_code">
-            <option value="">—</option>
-            ${S.formations.map((f) => `<option value="${f.code}" ${a.formation_code === f.code ? 'selected' : ''}>${ptEchapperHtml(f.libelle)}</option>`).join('')}
+            ${ptOptionsFormations(a.formation_code)}
           </select>
         </label>
         <label>Centre
@@ -871,8 +869,7 @@ function ptFormAjoutActivite(dateIso, horodatagesJour) {
         </label>
         <label class="pt-edition-activite-formation-champ">Formation
           <select name="formation_code">
-            <option value="">—</option>
-            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+            ${ptOptionsFormations('')}
           </select>
         </label>
         <label>Centre
@@ -3076,8 +3073,7 @@ async function ptRenderOngletPointage(conteneur) {
                  </label>
                  <label id="pt-debut-activite-formation-champ">Formation
                    <select name="formation_code">
-                     <option value="">—</option>
-                     ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+                     ${ptOptionsFormations('')}
                    </select>
                  </label>
                  <label>Centre
@@ -3128,8 +3124,7 @@ async function ptRenderOngletPointage(conteneur) {
           </label>
           <label id="pt-manuel-activite-formation-champ">Formation
             <select name="formation_code">
-              <option value="">—</option>
-              ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+              ${ptOptionsFormations('')}
             </select>
           </label>
           <label>Centre
@@ -3406,6 +3401,65 @@ function ptLibelleCentre(code) {
 function ptLibelleFormation(code) {
   return S.formations.find((f) => f.code === code)?.libelle || code;
 }
+
+// --- Ajout d'une formation à la volée depuis n'importe quel select
+// "Formation" (demande Jeremy, 2026-09-05, section 58 : "il manque des
+// catégorie de formation il faudrait que n'importe qui les ajoute et que
+// ça marche pour tout le monde") — n'importe quel technicien peut enrichir
+// le référentiel partagé `formations`, visible immédiatement par tous
+// (RLS assouplie en écriture INSERT uniquement, cf. patch SQL associé :
+// pas d'UPDATE/DELETE libre, pour éviter qu'un compte modifie/supprime les
+// formations créées par les autres).
+function ptOptionsFormations(codeSelectionne) {
+  return `
+    <option value="">—</option>
+    ${S.formations.map((f) => `<option value="${f.code}" ${f.code === codeSelectionne ? 'selected' : ''}>${ptEchapperHtml(f.libelle)}</option>`).join('')}
+    <option value="__nouvelle_formation__">+ Ajouter une formation…</option>`;
+}
+
+// Dérive un code stable (majuscules, sans accents, underscores) à partir du
+// libellé saisi, avec un court suffixe aléatoire pour éviter une collision
+// si deux personnes créent presque la même formation en même temps (code
+// = clé primaire de la table formations).
+function ptGenererCodeFormation(libelle) {
+  const base = libelle
+    .toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  const suffixe = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `${base || 'FORMATION'}_${suffixe}`;
+}
+
+// Écouteur unique, posé une seule fois au démarrage (voir tout en bas du
+// fichier), qui intercepte le choix "+ Ajouter une formation…" quel que
+// soit le formulaire d'où vient le select — pas besoin de le rebrancher
+// dans chaque écran qui affiche un select Formation.
+async function ptGererSelectFormation(select) {
+  if (select.value !== '__nouvelle_formation__') return;
+  const libelle = prompt('Nom de la nouvelle formation (ex. "Travail en hauteur") :');
+  if (!libelle || !libelle.trim()) {
+    select.value = '';
+    return;
+  }
+  const code = ptGenererCodeFormation(libelle.trim());
+  try {
+    const { error } = await ptSupabase.from('formations').insert({ code, libelle: libelle.trim() });
+    if (error) throw error;
+    await ptChargerFormations();
+    select.innerHTML = ptOptionsFormations(code);
+  } catch (erreur) {
+    PT_DEBUG.log(`Échec de l'ajout de la formation : ${erreur.message}`, true);
+    select.value = '';
+  }
+}
+
+document.addEventListener('change', (evenement) => {
+  if (evenement.target.matches('select[name="formation_code"]')) {
+    ptGererSelectFormation(evenement.target);
+  }
+});
 
 // --- Logique du bouton intelligent -----------------------------------
 function ptProchaineAction(horodatages) {

@@ -17,5 +17,5 @@ const PT_CONFIG = {
   // Version du cache du service worker — à incrémenter à chaque mise en ligne.
   // Doit rester synchronisée avec la constante VERSION_CACHE de
   // PT_service-worker.js (le service worker ne peut pas lire ce fichier).
-  VERSION_CACHE: 'pointage-v31',
+  VERSION_CACHE: 'pointage-v32',
 };
