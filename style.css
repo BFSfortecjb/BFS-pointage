@@ -391,6 +391,28 @@ body {
   border-bottom: 1px solid var(--bfs-gris-clair);
 }
 
+/* Activités imbriquées sous le pointage qui démarre leur bloc (Arrivée /
+   Fin de pause) — demande Jeremy 2026-09-05 (section 57) : "pointages et
+   activités séparés" gênait la lecture, elles sont maintenant rattachées
+   visuellement à leur tranche horaire plutôt que listées à part. */
+.pt-liste-activites-imbriquees {
+  list-style: none;
+  margin: 4px 0 2px 22px;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--bfs-gris-clair);
+}
+
+.pt-liste-activites-imbriquees .pt-ligne-editable {
+  padding: 2px 0;
+  border-bottom: none;
+  font-size: 0.92rem;
+  color: var(--bfs-gris-fonce, #444);
+}
+
+.pt-bloc-activites {
+  margin: 4px 0 2px 22px;
+}
+
 .pt-ligne-affichage {
   display: flex;
   justify-content: space-between;
@@ -426,6 +448,16 @@ body {
   padding: 8px;
   background: var(--bfs-gris-clair);
   border-radius: 6px;
+}
+
+/* Bug corrigé 2026-09-05 (section 56) : la règle ci-dessus force
+   display:flex même quand l'attribut HTML "hidden" est posé par le JS
+   (même spécificité CSS que [hidden]{display:none} de la feuille navigateur,
+   donc cette classe l'emportait et les formulaires restaient visibles en
+   permanence, quoi que fasse le JS). Règle plus spécifique pour que le
+   masquage fonctionne réellement. */
+.pt-form-edition-ligne[hidden] {
+  display: none;
 }
 
 .pt-form-edition-ligne label {

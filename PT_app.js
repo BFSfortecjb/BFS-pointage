@@ -470,10 +470,20 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
-          ${j.horodatages.length > 0
-            ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(h, j.date, j.horodatages[index + 1])).join('')}</ul>`
-            : ''}
-          ${ptRenderActivitesMatinApresMidi(j)}
+          ${(() => {
+            const { matin, apresMidi } = ptSeparerActivitesMatinApresMidi(j);
+            const aArrivee = j.horodatages.some((h) => h.type_horodatage === 'arrivee');
+            const aPauseFin = j.horodatages.some((h) => h.type_horodatage === 'pause_fin');
+            const orphelines = [...(!aArrivee ? matin : []), ...(!aPauseFin ? apresMidi : [])];
+            return `
+              ${j.horodatages.length > 0
+                ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(
+                    h, j.date, j.horodatages[index + 1],
+                    h.type_horodatage === 'arrivee' ? matin : h.type_horodatage === 'pause_fin' ? apresMidi : [],
+                  )).join('')}</ul>`
+                : ''}
+              ${ptRenderBlocActivites('Activités', orphelines)}`;
+          })()}
           ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date, j.horodatages) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
@@ -673,24 +683,28 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
 // Sépare les activités du jour en Matin / Après-midi (demande Jeremy,
 // 2026-08-06, section 31 du mémoire) — seuil = heure de début de la pause
 // méridienne pointée ce jour-là si elle existe, sinon 13h00 par défaut.
-// Chaque activité affichée avec son heure de début quand elle est connue
-// (renseignée automatiquement par le formulaire fusionné, section 28/29 —
-// les activités plus anciennes sans heure_debut apparaissent sans horaire).
-function ptRenderActivitesMatinApresMidi(jour) {
-  if (jour.activites.length === 0) return '';
+function ptSeparerActivitesMatinApresMidi(jour) {
+  if (jour.activites.length === 0) return { matin: [], apresMidi: [] };
 
   const pauseDebut = jour.horodatages.find((h) => h.type_horodatage === 'pause_debut');
   const seuil = pauseDebut ? ptFormatHeure(pauseDebut.moment) : '13:00';
 
   const activitesTriees = [...jour.activites].sort((a, b) => (a.heure_debut || '').localeCompare(b.heure_debut || ''));
-  const matin = activitesTriees.filter((a) => !a.heure_debut || a.heure_debut.slice(0, 5) <= seuil);
-  const apresMidi = activitesTriees.filter((a) => a.heure_debut && a.heure_debut.slice(0, 5) > seuil);
+  return {
+    matin: activitesTriees.filter((a) => !a.heure_debut || a.heure_debut.slice(0, 5) <= seuil),
+    apresMidi: activitesTriees.filter((a) => a.heure_debut && a.heure_debut.slice(0, 5) > seuil),
+  };
+}
 
-  return `
-    <div class="pt-jour-suivi-details">
-      ${matin.length > 0 ? `<div><strong>Matin :</strong><ul class="pt-liste-editable">${matin.map(ptLigneActiviteEditable).join('')}</ul></div>` : ''}
-      ${apresMidi.length > 0 ? `<div><strong>Après-midi :</strong><ul class="pt-liste-editable">${apresMidi.map(ptLigneActiviteEditable).join('')}</ul></div>` : ''}
-    </div>`;
+// Rendu d'un groupe d'activités sous forme de mini-liste imbriquée, avec un
+// titre optionnel (vide quand le groupe est déjà rattaché à un pointage
+// précis, cf. ptLigneHorodatageEditable ci-dessous — section 57 : "j'aime
+// pas l'affichage des infos c'est pas ergonomique", pointages et activités
+// enfin regroupés au lieu de deux listes séparées).
+function ptRenderBlocActivites(titre, activites) {
+  if (activites.length === 0) return '';
+  const entete = titre ? `<strong>${ptEchapperHtml(titre)} :</strong>` : '';
+  return `<div class="pt-bloc-activites">${entete}<ul class="pt-liste-editable pt-liste-activites-imbriquees">${activites.map(ptLigneActiviteEditable).join('')}</ul></div>`;
 }
 
 // Texte d'affichage d'une activité (extrait pour être réutilisé par la ligne
@@ -715,7 +729,7 @@ function ptTexteActivite(a) {
 // crayon (ouvre un petit formulaire inline) + bouton croix (supprime après
 // confirmation). Écouteurs posés une seule fois par délégation, voir
 // ptRenderSuiviJourParJour.
-function ptLigneHorodatageEditable(h, dateIso, suivant) {
+function ptLigneHorodatageEditable(h, dateIso, suivant, activitesAssociees = []) {
   // Bouton "+ activité" uniquement sur les pointages qui DÉMARRENT un bloc
   // de travail (arrivée le matin, fin de pause l'après-midi) — demande
   // Jeremy 2026-09-05 (section 53), corrigée le même jour : "il n'y a pas
@@ -766,6 +780,7 @@ function ptLigneHorodatageEditable(h, dateIso, suivant) {
         <button type="submit" class="pt-btn pt-btn-petit">Ajouter</button>
         <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
       </form>` : ''}
+      ${activitesAssociees.length > 0 ? `<ul class="pt-liste-activites-imbriquees">${activitesAssociees.map(ptLigneActiviteEditable).join('')}</ul>` : ''}
     </li>`;
 }
 
@@ -2913,7 +2928,7 @@ async function ptRenderSecretariatPointages(zoneContenu, conteneur) {
 
 async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) {
   // Centres et formations nécessaires pour résoudre les libellés affichés
-  // par ptRenderActivitesMatinApresMidi (même rendu que l'onglet Suivi).
+  // par le même rendu que l'onglet Suivi (imbriqué depuis la section 57).
   const [{ horodatages, activites }] = await Promise.all([
     ptChargerHistoriquePointageTechnicien(S.secretariatTechnicienId, S.secretariatNbJours),
     ptChargerCentres(),
@@ -2934,10 +2949,20 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
-          ${j.horodatages.length > 0
-            ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(h, j.date, j.horodatages[index + 1])).join('')}</ul>`
-            : ''}
-          ${ptRenderActivitesMatinApresMidi(j)}
+          ${(() => {
+            const { matin, apresMidi } = ptSeparerActivitesMatinApresMidi(j);
+            const aArrivee = j.horodatages.some((h) => h.type_horodatage === 'arrivee');
+            const aPauseFin = j.horodatages.some((h) => h.type_horodatage === 'pause_fin');
+            const orphelines = [...(!aArrivee ? matin : []), ...(!aPauseFin ? apresMidi : [])];
+            return `
+              ${j.horodatages.length > 0
+                ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(
+                    h, j.date, j.horodatages[index + 1],
+                    h.type_horodatage === 'arrivee' ? matin : h.type_horodatage === 'pause_fin' ? apresMidi : [],
+                  )).join('')}</ul>`
+                : ''}
+              ${ptRenderBlocActivites('Activités', orphelines)}`;
+          })()}
           ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date, j.horodatages) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
