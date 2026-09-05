@@ -3402,18 +3402,21 @@ function ptLibelleFormation(code) {
   return S.formations.find((f) => f.code === code)?.libelle || code;
 }
 
-// --- Ajout d'une formation à la volée depuis n'importe quel select
-// "Formation" (demande Jeremy, 2026-09-05, section 58 : "il manque des
-// catégorie de formation il faudrait que n'importe qui les ajoute et que
-// ça marche pour tout le monde") — n'importe quel technicien peut enrichir
-// le référentiel partagé `formations`, visible immédiatement par tous
-// (RLS assouplie en écriture INSERT uniquement, cf. patch SQL associé :
-// pas d'UPDATE/DELETE libre, pour éviter qu'un compte modifie/supprime les
-// formations créées par les autres).
+// --- Ajout / modification d'une formation à la volée depuis n'importe
+// quel select "Formation" (demande Jeremy, 2026-09-05, section 58 : "il
+// manque des catégorie de formation il faudrait que n'importe qui les
+// ajoute et que ça marche pour tout le monde", complétée le même jour par
+// "je voudrais pouvoir modifier les existants aussi") — n'importe quel
+// technicien peut enrichir ET corriger le référentiel partagé
+// `formations`, visible immédiatement par tous (RLS assouplie en INSERT et
+// UPDATE, cf. patch SQL associé — le DELETE reste réservé à l'admin, pour
+// éviter qu'une formation encore référencée par des activités disparaisse).
 function ptOptionsFormations(codeSelectionne) {
+  const formationActuelle = S.formations.find((f) => f.code === codeSelectionne);
   return `
     <option value="">—</option>
     ${S.formations.map((f) => `<option value="${f.code}" ${f.code === codeSelectionne ? 'selected' : ''}>${ptEchapperHtml(f.libelle)}</option>`).join('')}
+    ${formationActuelle ? `<option value="__modifier_formation__">✎ Modifier « ${ptEchapperHtml(formationActuelle.libelle)} »</option>` : ''}
     <option value="__nouvelle_formation__">+ Ajouter une formation…</option>`;
 }
 
@@ -3433,25 +3436,54 @@ function ptGenererCodeFormation(libelle) {
 }
 
 // Écouteur unique, posé une seule fois au démarrage (voir tout en bas du
-// fichier), qui intercepte le choix "+ Ajouter une formation…" quel que
+// fichier), qui intercepte les choix "+ Ajouter…"/"✎ Modifier…" quel que
 // soit le formulaire d'où vient le select — pas besoin de le rebrancher
-// dans chaque écran qui affiche un select Formation.
+// dans chaque écran qui affiche un select Formation. Pour "✎ Modifier", il
+// faut connaître la formation qui était sélectionnée AVANT l'ouverture du
+// menu déroulant (elle n'est plus disponible une fois "__modifier_formation__"
+// choisi) : capturée au focus, voir plus bas.
 async function ptGererSelectFormation(select) {
-  if (select.value !== '__nouvelle_formation__') return;
-  const libelle = prompt('Nom de la nouvelle formation (ex. "Travail en hauteur") :');
-  if (!libelle || !libelle.trim()) {
-    select.value = '';
+  const formationAvant = select.dataset.formationAvant || '';
+
+  if (select.value === '__nouvelle_formation__') {
+    const libelle = prompt('Nom de la nouvelle formation (ex. "Travail en hauteur") :');
+    if (!libelle || !libelle.trim()) {
+      select.value = formationAvant;
+      return;
+    }
+    const code = ptGenererCodeFormation(libelle.trim());
+    try {
+      const { error } = await ptSupabase.from('formations').insert({ code, libelle: libelle.trim() });
+      if (error) throw error;
+      await ptChargerFormations();
+      select.innerHTML = ptOptionsFormations(code);
+    } catch (erreur) {
+      PT_DEBUG.log(`Échec de l'ajout de la formation : ${erreur.message}`, true);
+      select.value = formationAvant;
+    }
     return;
   }
-  const code = ptGenererCodeFormation(libelle.trim());
-  try {
-    const { error } = await ptSupabase.from('formations').insert({ code, libelle: libelle.trim() });
-    if (error) throw error;
-    await ptChargerFormations();
-    select.innerHTML = ptOptionsFormations(code);
-  } catch (erreur) {
-    PT_DEBUG.log(`Échec de l'ajout de la formation : ${erreur.message}`, true);
-    select.value = '';
+
+  if (select.value === '__modifier_formation__') {
+    const formation = S.formations.find((f) => f.code === formationAvant);
+    if (!formation) {
+      select.value = '';
+      return;
+    }
+    const nouveauLibelle = prompt('Nouveau nom de la formation :', formation.libelle);
+    if (!nouveauLibelle || !nouveauLibelle.trim() || nouveauLibelle.trim() === formation.libelle) {
+      select.value = formationAvant;
+      return;
+    }
+    try {
+      const { error } = await ptSupabase.from('formations').update({ libelle: nouveauLibelle.trim() }).eq('code', formationAvant);
+      if (error) throw error;
+      await ptChargerFormations();
+      select.innerHTML = ptOptionsFormations(formationAvant);
+    } catch (erreur) {
+      PT_DEBUG.log(`Échec de la modification de la formation : ${erreur.message}`, true);
+      select.value = formationAvant;
+    }
   }
 }
 
@@ -3460,6 +3492,16 @@ document.addEventListener('change', (evenement) => {
     ptGererSelectFormation(evenement.target);
   }
 });
+
+// Mémorise, au focus (avant ouverture du menu), la formation réellement
+// sélectionnée sur ce select — sert de point de retour pour "✎ Modifier"
+// et pour annuler proprement "+ Ajouter" (capture:true car "focus" ne
+// remonte pas (bubble) contrairement à "change").
+document.addEventListener('focus', (evenement) => {
+  if (evenement.target.matches('select[name="formation_code"]')) {
+    evenement.target.dataset.formationAvant = evenement.target.value;
+  }
+}, true);
 
 // --- Logique du bouton intelligent -----------------------------------
 function ptProchaineAction(horodatages) {
