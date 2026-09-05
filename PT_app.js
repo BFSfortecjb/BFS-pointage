@@ -2720,7 +2720,7 @@ async function ptRenderOngletPointage(conteneur) {
       <button id="pt-btn-saisie-manuelle" class="pt-btn pt-btn-secondaire pt-btn-petit">Saisir un horodatage manquant</button>
       <form id="pt-form-manuel" hidden class="pt-form-manuel">
         <label>Type
-          <select name="type">
+          <select name="type" id="pt-manuel-type">
             <option value="arrivee">Arrivée</option>
             <option value="pause_debut">Début de pause méridienne</option>
             <option value="pause_fin">Fin de pause méridienne</option>
@@ -2733,6 +2733,27 @@ async function ptRenderOngletPointage(conteneur) {
         <label>Heure
           <input type="time" name="heure" required />
         </label>
+        <div id="pt-manuel-activite-bloc" hidden>
+          <p class="pt-info">Arrivée ou retour de pause : précise aussi l'activité démarrée à ce moment-là, pour ne pas perdre l'information.</p>
+          <label>Catégorie
+            <select name="type_activite" id="pt-manuel-activite-type">
+              ${Object.entries(PT_LABELS_ACTIVITE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
+            </select>
+          </label>
+          <label id="pt-manuel-activite-formation-champ">Formation
+            <select name="formation_code">
+              <option value="">—</option>
+              ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Centre
+            <select name="centre_code">
+              <option value="">—</option>
+              ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Commentaire <input type="text" name="commentaire_activite" maxlength="200" /></label>
+        </div>
         <button type="submit" class="pt-btn pt-btn-petit">Valider</button>
       </form>
     </section>
@@ -2929,20 +2950,61 @@ async function ptRenderOngletPointage(conteneur) {
     }
   });
 
-  document.getElementById('pt-btn-saisie-manuelle').addEventListener('click', () => {
-    document.getElementById('pt-form-manuel').hidden = false;
+  // Formulaire replié par défaut (masqué via l'attribut "hidden" posé dans
+  // le template) — bouton à bascule plutôt qu'à sens unique, pour pouvoir le
+  // replier une fois qu'on n'en a plus besoin (demande Jeremy).
+  const boutonSaisieManuelle = document.getElementById('pt-btn-saisie-manuelle');
+  const formManuel = document.getElementById('pt-form-manuel');
+  boutonSaisieManuelle.addEventListener('click', () => {
+    formManuel.hidden = !formManuel.hidden;
   });
+
+  // Les champs d'activité n'ont de sens que pour un début de bloc (arrivée
+  // ou retour de pause méridienne), comme le formulaire fusionné du bouton
+  // intelligent — masqués pour début de pause / départ / trajet inter-agence.
+  const champTypeManuel = document.getElementById('pt-manuel-type');
+  const blocActiviteManuel = document.getElementById('pt-manuel-activite-bloc');
+  const champTypeActiviteManuel = document.getElementById('pt-manuel-activite-type');
+  const champFormationManuel = document.getElementById('pt-manuel-activite-formation-champ');
+  const majAffichageBlocActiviteManuel = () => {
+    blocActiviteManuel.hidden = !['arrivee', 'pause_fin'].includes(champTypeManuel.value);
+  };
+  const majAffichageFormationManuel = () => {
+    champFormationManuel.style.display = champTypeActiviteManuel.value === 'acte_formation' ? '' : 'none';
+  };
+  majAffichageBlocActiviteManuel();
+  majAffichageFormationManuel();
+  champTypeManuel.addEventListener('change', majAffichageBlocActiviteManuel);
+  champTypeActiviteManuel.addEventListener('change', majAffichageFormationManuel);
 
   document.getElementById('pt-form-manuel').addEventListener('submit', async (evenement) => {
     evenement.preventDefault();
     const formulaire = new FormData(evenement.target);
     const dateChoisie = formulaire.get('date');
+    const typeChoisi = formulaire.get('type');
     // new Date('AAAA-MM-JJTHH:MM:00') est interprété en heure locale (pas de
     // suffixe "Z"), cohérent avec le reste de l'appli qui raisonne en heure
     // de Paris (cf. ptDateDuJour).
     const moment = new Date(`${dateChoisie}T${formulaire.get('heure')}:00`);
     try {
-      await ptEnregistrerHorodatage(formulaire.get('type'), { manuel: true, moment, date: dateChoisie });
+      await ptEnregistrerHorodatage(typeChoisi, { manuel: true, moment, date: dateChoisie });
+      // Rattrapage de l'activité en même temps que le pointage manqué
+      // (demande Jeremy : sans ça, impossible de savoir a posteriori ce qui
+      // a été fait ce jour-là). Toujours passer "date" explicitement à
+      // ptAjouterActivite : sinon elle utilise la date du jour même par
+      // défaut, ce qui casserait le rattrapage sur un jour précédent (même
+      // bug que celui corrigé pour les horodatages, section 27).
+      if (['arrivee', 'pause_fin'].includes(typeChoisi)) {
+        await ptAjouterActivite({
+          type_activite: formulaire.get('type_activite'),
+          formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
+          centre_code: formulaire.get('centre_code') || null,
+          heure_debut: formulaire.get('heure'),
+          heure_fin: null,
+          commentaire: formulaire.get('commentaire_activite') || null,
+          date: dateChoisie,
+        });
+      }
       ptRenderOngletPointage(conteneur);
     } catch (erreur) {
       PT_DEBUG.log(`Échec de la saisie manuelle : ${erreur.message}`, true);
