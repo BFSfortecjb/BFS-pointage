@@ -379,6 +379,73 @@ body {
   cursor: crosshair;
 }
 
+/* Lignes éditables (pointage/activité) dans Suivi > Jour par jour. */
+.pt-liste-editable {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+}
+
+.pt-ligne-editable {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-ligne-affichage {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.pt-ligne-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.pt-btn-icone {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 2px 6px;
+  color: var(--bfs-gris);
+}
+
+.pt-btn-icone:hover {
+  color: var(--bfs-noir);
+}
+
+.pt-form-edition-ligne {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  margin-top: 6px;
+  padding: 8px;
+  background: var(--bfs-gris-clair);
+  border-radius: 6px;
+}
+
+.pt-form-edition-ligne label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--bfs-gris);
+}
+
+.pt-form-edition-ligne input,
+.pt-form-edition-ligne select {
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
 
 
 /* Saisie numérique dans les écrans d'administration : coefficient de

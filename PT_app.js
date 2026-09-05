@@ -471,7 +471,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
           ${j.horodatages.length > 0
-            ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
+            ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
@@ -481,6 +481,85 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
   document.getElementById('pt-btn-suivi-plus').addEventListener('click', () => {
     S.suiviNbJours += 14;
     ptRenderSuiviJourParJour(zoneContenu, conteneur);
+  });
+
+  ptBrancherEditionLignesSuivi(zoneContenu, conteneur);
+}
+
+// Écouteurs par délégation sur les lignes éditables (pointage/activité),
+// posés une seule fois par élément #pt-suivi-contenu (drapeau sur le
+// dataset) — sinon ils s'empileraient à chaque ré-affichage déclenché par
+// une modification/suppression, et un même clic déclencherait l'action
+// plusieurs fois.
+function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
+  if (zoneContenu.dataset.editionLignesBranchee) return;
+  zoneContenu.dataset.editionLignesBranchee = 'true';
+
+  const rafraichir = () => ptRenderSuiviJourParJour(zoneContenu, conteneur);
+
+  zoneContenu.addEventListener('click', async (evenement) => {
+    const ligne = evenement.target.closest('.pt-ligne-editable');
+    if (!ligne) return;
+
+    if (evenement.target.matches('.pt-btn-editer-ligne')) {
+      ligne.querySelector('.pt-ligne-affichage').hidden = true;
+      ligne.querySelector('.pt-form-edition-ligne').hidden = false;
+      return;
+    }
+    if (evenement.target.matches('.pt-btn-annuler-ligne')) {
+      ligne.querySelector('.pt-form-edition-ligne').hidden = true;
+      ligne.querySelector('.pt-ligne-affichage').hidden = false;
+      return;
+    }
+    if (evenement.target.matches('.pt-btn-supprimer-ligne')) {
+      if (!confirm('Supprimer cette ligne ?')) return;
+      try {
+        if (ligne.dataset.kind === 'horodatage') {
+          await ptSupprimerHorodatage(Number(ligne.dataset.id));
+        } else {
+          await ptSupprimerActivite(Number(ligne.dataset.id));
+        }
+        rafraichir();
+      } catch (erreur) {
+        PT_DEBUG.log(`Échec de la suppression : ${erreur.message}`, true);
+      }
+    }
+  });
+
+  // Affichage conditionnel du champ Formation dans un formulaire d'édition
+  // d'activité, même logique que le formulaire fusionné (majAffichageFormationDebut).
+  zoneContenu.addEventListener('change', (evenement) => {
+    if (!evenement.target.matches('.pt-edition-activite-type')) return;
+    const champFormation = evenement.target.closest('form').querySelector('.pt-edition-activite-formation-champ');
+    champFormation.style.display = evenement.target.value === 'acte_formation' ? '' : 'none';
+  });
+
+  zoneContenu.addEventListener('submit', async (evenement) => {
+    const formulaire = evenement.target;
+    if (!formulaire.matches('.pt-form-edition-ligne')) return;
+    evenement.preventDefault();
+    const ligne = formulaire.closest('.pt-ligne-editable');
+    const donnees = new FormData(formulaire);
+    const boutonSubmit = formulaire.querySelector('button[type="submit"]');
+    boutonSubmit.disabled = true;
+    try {
+      if (ligne.dataset.kind === 'horodatage') {
+        await ptModifierHorodatage(Number(ligne.dataset.id), ligne.dataset.date, donnees.get('heure'));
+      } else {
+        await ptModifierActivite(Number(ligne.dataset.id), {
+          type_activite: donnees.get('type_activite'),
+          formation_code: donnees.get('type_activite') === 'acte_formation' ? (donnees.get('formation_code') || null) : null,
+          centre_code: donnees.get('centre_code') || null,
+          heure_debut: donnees.get('heure_debut') || null,
+          heure_fin: donnees.get('heure_fin') || null,
+          commentaire: donnees.get('commentaire') || null,
+        });
+      }
+      rafraichir();
+    } catch (erreur) {
+      PT_DEBUG.log(`Échec de l'enregistrement de la modification : ${erreur.message}`, true);
+      boutonSubmit.disabled = false;
+    }
   });
 }
 
@@ -500,26 +579,88 @@ function ptRenderActivitesMatinApresMidi(jour) {
   const matin = activitesTriees.filter((a) => !a.heure_debut || a.heure_debut.slice(0, 5) <= seuil);
   const apresMidi = activitesTriees.filter((a) => a.heure_debut && a.heure_debut.slice(0, 5) > seuil);
 
-  const ligneActivite = (a) => {
-    const heure = a.heure_debut
-      ? `${a.heure_debut.slice(0, 5)}${a.heure_fin ? `-${a.heure_fin.slice(0, 5)}` : ''} — `
-      : '';
-    const categorie = PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite;
-    const detail = a.formation_code
-      ? ` (${ptEchapperHtml(ptLibelleFormation(a.formation_code))})`
-      : a.centre_code ? ` (${ptEchapperHtml(ptLibelleCentre(a.centre_code))})` : '';
-    // Tâches saisies à la clôture du bloc (section 35 du mémoire).
-    const taches = (a.details && a.details.length)
-      ? ` : ${a.details.map((t) => ptEchapperHtml(t)).join(', ')}`
-      : '';
-    return `${heure}${categorie}${detail}${taches}`;
-  };
-
   return `
     <div class="pt-jour-suivi-details">
-      ${matin.length > 0 ? `<div><strong>Matin :</strong> ${matin.map(ligneActivite).join(' · ')}</div>` : ''}
-      ${apresMidi.length > 0 ? `<div><strong>Après-midi :</strong> ${apresMidi.map(ligneActivite).join(' · ')}</div>` : ''}
+      ${matin.length > 0 ? `<div><strong>Matin :</strong><ul class="pt-liste-editable">${matin.map(ptLigneActiviteEditable).join('')}</ul></div>` : ''}
+      ${apresMidi.length > 0 ? `<div><strong>Après-midi :</strong><ul class="pt-liste-editable">${apresMidi.map(ptLigneActiviteEditable).join('')}</ul></div>` : ''}
     </div>`;
+}
+
+// Texte d'affichage d'une activité (extrait pour être réutilisé par la ligne
+// éditable ci-dessous) — inchangé depuis la section 31, tâches de la
+// section 35 comprises.
+function ptTexteActivite(a) {
+  const heure = a.heure_debut
+    ? `${a.heure_debut.slice(0, 5)}${a.heure_fin ? `-${a.heure_fin.slice(0, 5)}` : ''} — `
+    : '';
+  const categorie = PT_LABELS_ACTIVITE[a.type_activite] || a.type_activite;
+  const detail = a.formation_code
+    ? ` (${ptEchapperHtml(ptLibelleFormation(a.formation_code))})`
+    : a.centre_code ? ` (${ptEchapperHtml(ptLibelleCentre(a.centre_code))})` : '';
+  const taches = (a.details && a.details.length)
+    ? ` : ${a.details.map((t) => ptEchapperHtml(t)).join(', ')}`
+    : '';
+  return `${heure}${categorie}${detail}${taches}`;
+}
+
+// --- Lignes éditables (pointage / activité) dans Suivi > Jour par jour
+// (demande Jeremy, 2026-09-02, section 50 du mémoire) — affichage + bouton
+// crayon (ouvre un petit formulaire inline) + bouton croix (supprime après
+// confirmation). Écouteurs posés une seule fois par délégation, voir
+// ptRenderSuiviJourParJour.
+function ptLigneHorodatageEditable(h, dateIso) {
+  return `
+    <li class="pt-ligne-editable" data-kind="horodatage" data-id="${h.id}" data-date="${dateIso}">
+      <div class="pt-ligne-affichage">
+        <span>${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}</span>
+        <span class="pt-ligne-actions">
+          <button type="button" class="pt-btn-icone pt-btn-editer-ligne" title="Modifier l'heure">✎</button>
+          <button type="button" class="pt-btn-icone pt-btn-supprimer-ligne" title="Supprimer">✕</button>
+        </span>
+      </div>
+      <form class="pt-form-edition-ligne" hidden>
+        <label>Heure <input type="time" name="heure" value="${ptFormatHeure(h.moment)}" required /></label>
+        <button type="submit" class="pt-btn pt-btn-petit">Enregistrer</button>
+        <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
+      </form>
+    </li>`;
+}
+
+function ptLigneActiviteEditable(a) {
+  return `
+    <li class="pt-ligne-editable" data-kind="activite" data-id="${a.id}">
+      <div class="pt-ligne-affichage">
+        <span>${ptTexteActivite(a)}</span>
+        <span class="pt-ligne-actions">
+          <button type="button" class="pt-btn-icone pt-btn-editer-ligne" title="Modifier">✎</button>
+          <button type="button" class="pt-btn-icone pt-btn-supprimer-ligne" title="Supprimer">✕</button>
+        </span>
+      </div>
+      <form class="pt-form-edition-ligne" hidden>
+        <label>Catégorie
+          <select name="type_activite" class="pt-edition-activite-type">
+            ${Object.entries(PT_LABELS_ACTIVITE).map(([v, l]) => `<option value="${v}" ${a.type_activite === v ? 'selected' : ''}>${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="pt-edition-activite-formation-champ">Formation
+          <select name="formation_code">
+            <option value="">—</option>
+            ${S.formations.map((f) => `<option value="${f.code}" ${a.formation_code === f.code ? 'selected' : ''}>${ptEchapperHtml(f.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Centre
+          <select name="centre_code">
+            <option value="">—</option>
+            ${S.centres.map((c) => `<option value="${c.code}" ${a.centre_code === c.code ? 'selected' : ''}>${ptEchapperHtml(c.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Début <input type="time" name="heure_debut" value="${a.heure_debut ? a.heure_debut.slice(0, 5) : ''}" /></label>
+        <label>Fin <input type="time" name="heure_fin" value="${a.heure_fin ? a.heure_fin.slice(0, 5) : ''}" /></label>
+        <label>Commentaire <input type="text" name="commentaire" maxlength="200" value="${ptEchapperHtml(a.commentaire || '')}" /></label>
+        <button type="submit" class="pt-btn pt-btn-petit">Enregistrer</button>
+        <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
+      </form>
+    </li>`;
 }
 
 const PT_LABELS_MOIS = [
@@ -806,14 +947,14 @@ async function ptChargerHistoriqueSuivi(nbJours) {
   const [horodatages, activites] = await Promise.all([
     ptSupabase
       .from('horodatages')
-      .select('date, moment, type_horodatage')
+      .select('id, date, moment, type_horodatage')
       .eq('technicien_id', S.session.user.id)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
     ptSupabase
       .from('activites')
-      .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
+      .select('id, date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', S.session.user.id)
       .gte('date', dateDebutIso),
   ]);
@@ -2575,7 +2716,7 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
           ${j.horodatages.length > 0
-            ? `<div class="pt-jour-suivi-details">${j.horodatages.map((h) => `${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}`).join(' · ')}</div>`
+            ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
@@ -3153,6 +3294,39 @@ async function ptEnregistrerHorodatage(type, options = {}) {
     latitude: geoloc.latitude,
     longitude: geoloc.longitude,
   });
+  if (error) throw error;
+}
+
+// --- Correction depuis l'onglet Suivi (demande Jeremy, 2026-09-02,
+// section 50 du mémoire) : modifier l'heure d'un pointage, ou
+// catégorie/formation/centre/heures/commentaire d'une activité, directement
+// dans "Jour par jour" plutôt que supprimer et ressaisir à la main. La RLS
+// (horodatages_update/delete, activites_update/delete) autorise déjà le
+// technicien sur ses propres lignes — pas de changement de schéma requis.
+async function ptModifierHorodatage(id, dateIso, heure) {
+  // Recompose "moment" à partir de la date déjà enregistrée (non modifiable
+  // ici, seule l'heure l'est) et de la nouvelle heure choisie — même
+  // construction locale que la saisie manuelle (cf. ptEnregistrerHorodatage).
+  const moment = new Date(`${dateIso}T${heure}:00`);
+  const { error } = await ptSupabase
+    .from('horodatages')
+    .update({ moment: moment.toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+async function ptSupprimerHorodatage(id) {
+  const { error } = await ptSupabase.from('horodatages').delete().eq('id', id);
+  if (error) throw error;
+}
+
+async function ptModifierActivite(id, champs) {
+  const { error } = await ptSupabase.from('activites').update(champs).eq('id', id);
+  if (error) throw error;
+}
+
+async function ptSupprimerActivite(id) {
+  const { error } = await ptSupabase.from('activites').delete().eq('id', id);
   if (error) throw error;
 }
 
