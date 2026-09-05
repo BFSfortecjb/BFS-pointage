@@ -471,10 +471,10 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
           ${j.horodatages.length > 0
-            ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
+            ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(h, j.date, j.horodatages[index + 1])).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
-          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date) : ''}
+          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date, j.horodatages) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
@@ -517,14 +517,32 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
     const ligne = evenement.target.closest('.pt-ligne-editable');
     if (!ligne) return;
 
+    if (evenement.target.matches('.pt-btn-ajouter-activite-ligne')) {
+      // Formulaire "+ activité" propre à ce pointage (pas le même que le
+      // formulaire d'édition d'heure) : simple bascule, indépendante de
+      // l'affichage/édition de la ligne elle-même.
+      const formAjout = ligne.querySelector('.pt-form-ajout-depuis-pointage');
+      formAjout.hidden = !formAjout.hidden;
+      return;
+    }
     if (evenement.target.matches('.pt-btn-editer-ligne')) {
+      // Le formulaire d'édition d'heure est toujours le sibling immédiat de
+      // .pt-ligne-affichage (avant l'éventuel formulaire d'ajout d'activité,
+      // qui partage la même classe .pt-form-edition-ligne pour le style).
       ligne.querySelector('.pt-ligne-affichage').hidden = true;
-      ligne.querySelector('.pt-form-edition-ligne').hidden = false;
+      ligne.querySelector('.pt-ligne-affichage').nextElementSibling.hidden = false;
       return;
     }
     if (evenement.target.matches('.pt-btn-annuler-ligne')) {
-      ligne.querySelector('.pt-form-edition-ligne').hidden = true;
-      ligne.querySelector('.pt-ligne-affichage').hidden = false;
+      const formulaire = evenement.target.closest('form');
+      formulaire.hidden = true;
+      formulaire.reset();
+      // Le formulaire d'ajout depuis un pointage ne masque jamais la ligne
+      // d'affichage (il s'ouvre à côté, pas à la place) : rien à réafficher
+      // dans ce cas.
+      if (!formulaire.matches('.pt-form-ajout-depuis-pointage')) {
+        ligne.querySelector('.pt-ligne-affichage').hidden = false;
+      }
       return;
     }
     if (evenement.target.matches('.pt-btn-supprimer-ligne')) {
@@ -545,9 +563,23 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
   // Affichage conditionnel du champ Formation dans un formulaire d'édition
   // d'activité, même logique que le formulaire fusionné (majAffichageFormationDebut).
   zoneContenu.addEventListener('change', (evenement) => {
-    if (!evenement.target.matches('.pt-edition-activite-type')) return;
-    const champFormation = evenement.target.closest('form').querySelector('.pt-edition-activite-formation-champ');
-    champFormation.style.display = evenement.target.value === 'acte_formation' ? '' : 'none';
+    if (evenement.target.matches('.pt-edition-activite-type')) {
+      const champFormation = evenement.target.closest('form').querySelector('.pt-edition-activite-formation-champ');
+      champFormation.style.display = evenement.target.value === 'acte_formation' ? '' : 'none';
+      return;
+    }
+    // Sélection d'une tranche horaire "naturelle" (matin/après-midi déduits
+    // des pointages du jour, cf. ptCalculerTranchesJour) : pré-remplit les
+    // heures plutôt que de laisser resaisir des horaires à la main, qui
+    // risqueraient de créer un doublon décalé par rapport au pointage réel.
+    // Reste modifiable ensuite : ce n'est qu'un pré-remplissage, pas un verrou.
+    if (evenement.target.matches('.pt-ajout-activite-tranche')) {
+      const option = evenement.target.selectedOptions[0];
+      if (option.value === '') return;
+      const formulaire = evenement.target.closest('form');
+      formulaire.querySelector('[name="heure_debut"]').value = option.dataset.debut || '';
+      formulaire.querySelector('[name="heure_fin"]').value = option.dataset.fin || '';
+    }
   });
 
   zoneContenu.addEventListener('submit', async (evenement) => {
@@ -573,6 +605,30 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
       } catch (erreur) {
         PT_DEBUG.log(`Échec de l'ajout d'activité rétroactive : ${erreur.message}`, true);
         boutonSubmit.disabled = false;
+      }
+      return;
+    }
+
+    if (formulaire.matches('.pt-form-ajout-depuis-pointage')) {
+      evenement.preventDefault();
+      const ligneOrigine = formulaire.closest('.pt-ligne-editable');
+      const donneesAjout = new FormData(formulaire);
+      const boutonSubmitAjout = formulaire.querySelector('button[type="submit"]');
+      boutonSubmitAjout.disabled = true;
+      try {
+        await ptAjouterActivite({
+          date: ligneOrigine.dataset.date,
+          type_activite: donneesAjout.get('type_activite'),
+          formation_code: donneesAjout.get('type_activite') === 'acte_formation' ? (donneesAjout.get('formation_code') || null) : null,
+          centre_code: donneesAjout.get('centre_code') || null,
+          heure_debut: donneesAjout.get('heure_debut') || null,
+          heure_fin: donneesAjout.get('heure_fin') || null,
+          commentaire: donneesAjout.get('commentaire') || null,
+        });
+        rafraichir();
+      } catch (erreur) {
+        PT_DEBUG.log(`Échec de l'ajout d'activité : ${erreur.message}`, true);
+        boutonSubmitAjout.disabled = false;
       }
       return;
     }
@@ -649,12 +705,19 @@ function ptTexteActivite(a) {
 // crayon (ouvre un petit formulaire inline) + bouton croix (supprime après
 // confirmation). Écouteurs posés une seule fois par délégation, voir
 // ptRenderSuiviJourParJour.
-function ptLigneHorodatageEditable(h, dateIso) {
+function ptLigneHorodatageEditable(h, dateIso, suivant) {
+  // Bouton "+ activité" au niveau de CHAQUE pointage (demande Jeremy,
+  // 2026-09-05, section 53) : pré-remplit Début avec l'heure de ce pointage
+  // et Fin avec l'heure du pointage suivant du même jour s'il existe, pour
+  // rattacher rapidement une activité oubliée sans ressaisir les horaires.
+  const heureDebutSuggestion = ptFormatHeure(h.moment);
+  const heureFinSuggestion = suivant ? ptFormatHeure(suivant.moment) : '';
   return `
     <li class="pt-ligne-editable" data-kind="horodatage" data-id="${h.id}" data-date="${dateIso}">
       <div class="pt-ligne-affichage">
         <span>${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}</span>
         <span class="pt-ligne-actions">
+          <button type="button" class="pt-btn-icone pt-btn-ajouter-activite-ligne" title="Ajouter une activité à partir de cette heure">+</button>
           <button type="button" class="pt-btn-icone pt-btn-editer-ligne" title="Modifier l'heure">✎</button>
           <button type="button" class="pt-btn-icone pt-btn-supprimer-ligne" title="Supprimer">✕</button>
         </span>
@@ -662,6 +725,30 @@ function ptLigneHorodatageEditable(h, dateIso) {
       <form class="pt-form-edition-ligne" hidden>
         <label>Heure <input type="time" name="heure" value="${ptFormatHeure(h.moment)}" required /></label>
         <button type="submit" class="pt-btn pt-btn-petit">Enregistrer</button>
+        <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
+      </form>
+      <form class="pt-form-edition-ligne pt-form-ajout-depuis-pointage" hidden>
+        <label>Catégorie
+          <select name="type_activite" class="pt-edition-activite-type">
+            ${Object.entries(PT_LABELS_ACTIVITE).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="pt-edition-activite-formation-champ">Formation
+          <select name="formation_code">
+            <option value="">—</option>
+            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Centre
+          <select name="centre_code">
+            <option value="">—</option>
+            ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Début <input type="time" name="heure_debut" value="${heureDebutSuggestion}" /></label>
+        <label>Fin <input type="time" name="heure_fin" value="${heureFinSuggestion}" /></label>
+        <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+        <button type="submit" class="pt-btn pt-btn-petit">Ajouter</button>
         <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
       </form>
     </li>`;
@@ -710,7 +797,39 @@ function ptLigneActiviteEditable(a) {
 // (oubli) — jusqu'ici impossible à rattraper depuis Suivi, il fallait
 // repasser par l'onglet Pointage (qui ne fonctionne que pour aujourd'hui).
 // Replié par défaut (simple bouton), déplié au clic.
-function ptFormAjoutActivite(dateIso) {
+// Tranches horaires "naturelles" du jour, déduites des pointages déjà
+// enregistrés (matin = arrivée -> début de pause, après-midi = fin de pause
+// -> départ, ou journée complète si pas de pause pointée) — sert à
+// pré-remplir le formulaire d'ajout d'activité rétroactive sans obliger à
+// retaper des horaires à la main (demande Jeremy : affecter à une tranche
+// existante plutôt que créer un doublon avec des horaires approximatifs).
+function ptCalculerTranchesJour(horodatagesJour) {
+  const trouver = (type) => horodatagesJour.find((h) => h.type_horodatage === type);
+  const arrivee = trouver('arrivee');
+  const pauseDebut = trouver('pause_debut');
+  const pauseFin = trouver('pause_fin');
+  const depart = trouver('depart');
+  const tranches = [];
+
+  if (arrivee && pauseDebut) {
+    tranches.push({ label: `Matin (${ptFormatHeure(arrivee.moment)}–${ptFormatHeure(pauseDebut.moment)})`, heureDebut: ptFormatHeure(arrivee.moment), heureFin: ptFormatHeure(pauseDebut.moment) });
+  } else if (arrivee && depart) {
+    tranches.push({ label: `Journée complète (${ptFormatHeure(arrivee.moment)}–${ptFormatHeure(depart.moment)})`, heureDebut: ptFormatHeure(arrivee.moment), heureFin: ptFormatHeure(depart.moment) });
+  } else if (arrivee) {
+    tranches.push({ label: `Depuis l'arrivée (${ptFormatHeure(arrivee.moment)})`, heureDebut: ptFormatHeure(arrivee.moment), heureFin: '' });
+  }
+
+  if (pauseFin && depart) {
+    tranches.push({ label: `Après-midi (${ptFormatHeure(pauseFin.moment)}–${ptFormatHeure(depart.moment)})`, heureDebut: ptFormatHeure(pauseFin.moment), heureFin: ptFormatHeure(depart.moment) });
+  } else if (pauseFin) {
+    tranches.push({ label: `Après-midi (depuis ${ptFormatHeure(pauseFin.moment)})`, heureDebut: ptFormatHeure(pauseFin.moment), heureFin: '' });
+  }
+
+  return tranches;
+}
+
+function ptFormAjoutActivite(dateIso, horodatagesJour) {
+  const tranches = ptCalculerTranchesJour(horodatagesJour);
   return `
     <div class="pt-ajout-activite-jour" data-date="${dateIso}">
       <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-ouvrir-ajout-activite">+ Ajouter une activité oubliée</button>
@@ -732,6 +851,13 @@ function ptFormAjoutActivite(dateIso) {
             ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
           </select>
         </label>
+        ${tranches.length > 0 ? `
+          <label>Tranche horaire
+            <select class="pt-ajout-activite-tranche">
+              <option value="">Personnalisée</option>
+              ${tranches.map((t, i) => `<option value="${i}" data-debut="${t.heureDebut}" data-fin="${t.heureFin}">${ptEchapperHtml(t.label)}</option>`).join('')}
+            </select>
+          </label>` : ''}
         <label>Début <input type="time" name="heure_debut" /></label>
         <label>Fin <input type="time" name="heure_fin" /></label>
         <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
@@ -2794,10 +2920,10 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
           ${j.horodatages.length > 0
-            ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
+            ? `<ul class="pt-liste-editable">${j.horodatages.map((h, index) => ptLigneHorodatageEditable(h, j.date, j.horodatages[index + 1])).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
-          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date) : ''}
+          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date, j.horodatages) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-secretariat-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
