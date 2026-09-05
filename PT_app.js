@@ -518,14 +518,24 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
     if (!ligne) return;
 
     if (evenement.target.matches('.pt-btn-ajouter-activite-ligne')) {
-      // Formulaire "+ activité" propre à ce pointage (pas le même que le
-      // formulaire d'édition d'heure) : simple bascule, indépendante de
-      // l'affichage/édition de la ligne elle-même.
+      // Un seul formulaire visible à la fois par ligne (demande Jeremy,
+      // 2026-09-05 : "il faudrait que la fenêtre d'ajout apparaisse à la
+      // demande pour faciliter la visibilité") — si le formulaire d'édition
+      // d'heure est ouvert, on le referme avant d'ouvrir celui d'ajout.
+      const formEdition = ligne.querySelector('.pt-ligne-affichage').nextElementSibling;
+      if (formEdition && !formEdition.hidden) {
+        formEdition.hidden = true;
+        ligne.querySelector('.pt-ligne-affichage').hidden = false;
+      }
       const formAjout = ligne.querySelector('.pt-form-ajout-depuis-pointage');
       formAjout.hidden = !formAjout.hidden;
       return;
     }
     if (evenement.target.matches('.pt-btn-editer-ligne')) {
+      // Même logique dans l'autre sens : ouvrir l'édition d'heure referme
+      // le formulaire d'ajout d'activité s'il était ouvert.
+      const formAjout = ligne.querySelector('.pt-form-ajout-depuis-pointage');
+      if (formAjout) formAjout.hidden = true;
       // Le formulaire d'édition d'heure est toujours le sibling immédiat de
       // .pt-ligne-affichage (avant l'éventuel formulaire d'ajout d'activité,
       // qui partage la même classe .pt-form-edition-ligne pour le style).
