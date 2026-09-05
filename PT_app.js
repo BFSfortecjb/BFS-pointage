@@ -474,6 +474,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
             ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
+          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-suivi-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
@@ -498,6 +499,21 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
   const rafraichir = () => ptRenderSuiviJourParJour(zoneContenu, conteneur);
 
   zoneContenu.addEventListener('click', async (evenement) => {
+    // Ouverture/annulation du formulaire d'ajout d'activité oubliée (n'est
+    // pas dans une .pt-ligne-editable, traité avant le reste).
+    if (evenement.target.matches('.pt-btn-ouvrir-ajout-activite')) {
+      evenement.target.hidden = true;
+      evenement.target.nextElementSibling.hidden = false;
+      return;
+    }
+    if (evenement.target.matches('.pt-btn-annuler-ajout-activite')) {
+      const formulaire = evenement.target.closest('.pt-form-ajout-activite-jour');
+      formulaire.hidden = true;
+      formulaire.reset();
+      formulaire.previousElementSibling.hidden = false;
+      return;
+    }
+
     const ligne = evenement.target.closest('.pt-ligne-editable');
     if (!ligne) return;
 
@@ -536,6 +552,31 @@ function ptBrancherEditionLignesSuivi(zoneContenu, conteneur) {
 
   zoneContenu.addEventListener('submit', async (evenement) => {
     const formulaire = evenement.target;
+
+    if (formulaire.matches('.pt-form-ajout-activite-jour')) {
+      evenement.preventDefault();
+      const dateIso = formulaire.closest('.pt-ajout-activite-jour').dataset.date;
+      const donnees = new FormData(formulaire);
+      const boutonSubmit = formulaire.querySelector('button[type="submit"]');
+      boutonSubmit.disabled = true;
+      try {
+        await ptAjouterActivite({
+          date: dateIso,
+          type_activite: donnees.get('type_activite'),
+          formation_code: donnees.get('type_activite') === 'acte_formation' ? (donnees.get('formation_code') || null) : null,
+          centre_code: donnees.get('centre_code') || null,
+          heure_debut: donnees.get('heure_debut') || null,
+          heure_fin: donnees.get('heure_fin') || null,
+          commentaire: donnees.get('commentaire') || null,
+        });
+        rafraichir();
+      } catch (erreur) {
+        PT_DEBUG.log(`Échec de l'ajout d'activité rétroactive : ${erreur.message}`, true);
+        boutonSubmit.disabled = false;
+      }
+      return;
+    }
+
     if (!formulaire.matches('.pt-form-edition-ligne')) return;
     evenement.preventDefault();
     const ligne = formulaire.closest('.pt-ligne-editable');
@@ -661,6 +702,43 @@ function ptLigneActiviteEditable(a) {
         <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
       </form>
     </li>`;
+}
+
+// --- Ajout rétroactif d'une activité oubliée sur un jour donné (demande
+// Jeremy, 2026-09-02, suite de la section 50) : un jour peut avoir ses
+// pointages complets sans qu'aucune activité n'ait été saisie ce jour-là
+// (oubli) — jusqu'ici impossible à rattraper depuis Suivi, il fallait
+// repasser par l'onglet Pointage (qui ne fonctionne que pour aujourd'hui).
+// Replié par défaut (simple bouton), déplié au clic.
+function ptFormAjoutActivite(dateIso) {
+  return `
+    <div class="pt-ajout-activite-jour" data-date="${dateIso}">
+      <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-ouvrir-ajout-activite">+ Ajouter une activité oubliée</button>
+      <form class="pt-form-edition-ligne pt-form-ajout-activite-jour" hidden>
+        <label>Catégorie
+          <select name="type_activite" class="pt-edition-activite-type">
+            ${Object.entries(PT_LABELS_ACTIVITE).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+          </select>
+        </label>
+        <label class="pt-edition-activite-formation-champ">Formation
+          <select name="formation_code">
+            <option value="">—</option>
+            ${S.formations.map((f) => `<option value="${f.code}">${ptEchapperHtml(f.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Centre
+          <select name="centre_code">
+            <option value="">—</option>
+            ${S.centres.map((c) => `<option value="${c.code}">${ptEchapperHtml(c.libelle)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Début <input type="time" name="heure_debut" /></label>
+        <label>Fin <input type="time" name="heure_fin" /></label>
+        <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+        <button type="submit" class="pt-btn pt-btn-petit">Ajouter</button>
+        <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ajout-activite">Annuler</button>
+      </form>
+    </div>`;
 }
 
 const PT_LABELS_MOIS = [
@@ -2719,6 +2797,7 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
             ? `<ul class="pt-liste-editable">${j.horodatages.map((h) => ptLigneHorodatageEditable(h, j.date)).join('')}</ul>`
             : ''}
           ${ptRenderActivitesMatinApresMidi(j)}
+          ${j.horodatages.length > 0 ? ptFormAjoutActivite(j.date) : ''}
         </li>`).join('') || '<li class="pt-liste-vide">Aucune donnée sur cette période.</li>'}
     </ul>
     <button id="pt-btn-secretariat-plus" class="pt-btn pt-btn-secondaire pt-btn-petit">Voir plus de jours</button>`;
