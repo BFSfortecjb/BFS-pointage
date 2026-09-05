@@ -706,10 +706,14 @@ function ptTexteActivite(a) {
 // confirmation). Écouteurs posés une seule fois par délégation, voir
 // ptRenderSuiviJourParJour.
 function ptLigneHorodatageEditable(h, dateIso, suivant) {
-  // Bouton "+ activité" au niveau de CHAQUE pointage (demande Jeremy,
-  // 2026-09-05, section 53) : pré-remplit Début avec l'heure de ce pointage
-  // et Fin avec l'heure du pointage suivant du même jour s'il existe, pour
-  // rattacher rapidement une activité oubliée sans ressaisir les horaires.
+  // Bouton "+ activité" uniquement sur les pointages qui DÉMARRENT un bloc
+  // de travail (arrivée le matin, fin de pause l'après-midi) — demande
+  // Jeremy 2026-09-05 (section 53), corrigée le même jour : "il n'y a pas
+  // d'activité sur les pause méridienne". Sur "Début de pause" et "Départ",
+  // la tranche qui suit est soit la pause méridienne elle-même (aucune
+  // activité de travail possible), soit la fin de journée (rien après) —
+  // le bouton n'a donc de sens que sur arrivee/pause_fin.
+  const permetAjoutActivite = h.type_horodatage === 'arrivee' || h.type_horodatage === 'pause_fin';
   const heureDebutSuggestion = ptFormatHeure(h.moment);
   const heureFinSuggestion = suivant ? ptFormatHeure(suivant.moment) : '';
   return `
@@ -717,7 +721,7 @@ function ptLigneHorodatageEditable(h, dateIso, suivant) {
       <div class="pt-ligne-affichage">
         <span>${ptFormatHeure(h.moment)} ${PT_LABELS_HORODATAGE[h.type_horodatage] || h.type_horodatage}</span>
         <span class="pt-ligne-actions">
-          <button type="button" class="pt-btn-icone pt-btn-ajouter-activite-ligne" title="Ajouter une activité à partir de cette heure">+</button>
+          ${permetAjoutActivite ? `<button type="button" class="pt-btn-icone pt-btn-ajouter-activite-ligne" title="Ajouter une activité à partir de cette heure">+</button>` : ''}
           <button type="button" class="pt-btn-icone pt-btn-editer-ligne" title="Modifier l'heure">✎</button>
           <button type="button" class="pt-btn-icone pt-btn-supprimer-ligne" title="Supprimer">✕</button>
         </span>
@@ -727,6 +731,7 @@ function ptLigneHorodatageEditable(h, dateIso, suivant) {
         <button type="submit" class="pt-btn pt-btn-petit">Enregistrer</button>
         <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
       </form>
+      ${permetAjoutActivite ? `
       <form class="pt-form-edition-ligne pt-form-ajout-depuis-pointage" hidden>
         <label>Catégorie
           <select name="type_activite" class="pt-edition-activite-type">
@@ -750,7 +755,7 @@ function ptLigneHorodatageEditable(h, dateIso, suivant) {
         <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
         <button type="submit" class="pt-btn pt-btn-petit">Ajouter</button>
         <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-annuler-ligne">Annuler</button>
-      </form>
+      </form>` : ''}
     </li>`;
 }
 
