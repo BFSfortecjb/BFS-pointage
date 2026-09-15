@@ -3772,3 +3772,7 @@ async function ptAjouterNuitee(avecPetitDej, commentaire) {
 }
 
 document.addEventListener('DOMContentLoaded', ptInit);
+
+// --- Mention de copyright (règle commune BFS, REGLES_COMMUNES_APPLIS_BFS.md) ---
+console.log('%c© 2026 Jérémy Bizeul — Vigie-lance, pour BFS Prévention.', 'color:#c9a227; font-weight:bold; font-size:12px;');
+console.log('Pointage BFS — outil original. Toute reproduction ou réutilisation de ce code sans autorisation écrite est interdite. Contact : https://www.bfs-prevention.fr');
