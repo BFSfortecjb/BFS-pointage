@@ -1282,6 +1282,16 @@ function ptTrajetCompteHeuresActif() {
 // un total d'heures par date (date de l'arrivée — un trajet qui franchirait
 // minuit serait entièrement compté sur le jour d'arrivée, cas non géré
 // finement, pas rencontré en pratique pour un trajet inter-agence).
+// Durée maximale plausible pour UN trajet inter-agence (un aller ou un
+// retour). Au-delà, ce n'est pas un vrai trajet mais un pointage orphelin
+// (arrivée oubliée puis un "départ"+"arrivée" plusieurs jours après pour
+// un tout autre trajet, apparié à tort avec l'ancien départ resté en
+// attente) — cas réel trouvé le 2026-09-21 (section 65 du mémoire) : un
+// départ du 11/09 sans arrivée correspondante, apparié avec l'arrivée du
+// 16/09 d'un trajet totalement différent, ajoutant ~120h fantômes au
+// récap. On ignore la paire plutôt que de fausser le total.
+const PT_DUREE_TRAJET_MAX_HEURES = 12;
+
 function ptCalculerHeuresTrajetInterAgenceParJour(horodatagesTrajet) {
   const tries = [...horodatagesTrajet].sort((a, b) => new Date(a.moment) - new Date(b.moment));
   const parJour = {};
@@ -1291,7 +1301,9 @@ function ptCalculerHeuresTrajetInterAgenceParJour(horodatagesTrajet) {
       depart = h;
     } else if (h.type_horodatage === 'trajet_inter_site_fin' && depart) {
       const heures = (new Date(h.moment) - new Date(depart.moment)) / 3_600_000;
-      parJour[h.date] = (parJour[h.date] || 0) + heures;
+      if (heures > 0 && heures <= PT_DUREE_TRAJET_MAX_HEURES) {
+        parJour[h.date] = (parJour[h.date] || 0) + heures;
+      }
       depart = null;
     }
   }
