@@ -2222,6 +2222,10 @@ async function ptRenderFraisSuivi(zoneContenu, conteneur) {
       <label>Montant (€) <input type="number" name="montant" min="0" step="0.01" required /></label>
       <label>Type de frais <input type="text" name="type_frais" maxlength="100" placeholder="Ex. repas, péage, hôtel" /></label>
       <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+      <label>Photo du justificatif
+        <input type="file" name="justificatif_photo" accept="image/*" capture="environment" />
+      </label>
+      <p class="pt-info">Le numéro de justificatif ci-dessus est incrusté automatiquement en haut de la photo avant l'envoi.</p>
       <button type="submit" class="pt-btn pt-btn-petit">Envoyer</button>
       <p id="pt-frais-erreur" class="pt-message-erreur" hidden></p>
     </form>
@@ -2236,7 +2240,9 @@ async function ptRenderFraisSuivi(zoneContenu, conteneur) {
               <strong>${Number(f.montant).toFixed(2).replace('.', ',')} €${f.type_frais ? ` — ${ptEchapperHtml(f.type_frais)}` : ''}</strong>
               <span class="pt-badge ${statut.classe}">${statut.label}</span>
             </div>
-            <div class="pt-jour-suivi-details">${f.date}${f.numero_justificatif ? ` — Justificatif n°${ptEchapperHtml(f.numero_justificatif)}` : ''}${f.commentaire ? ` — ${ptEchapperHtml(f.commentaire)}` : ''}</div>
+            <div class="pt-jour-suivi-details">${f.date}${f.numero_justificatif ? ` — Justificatif n°${ptEchapperHtml(f.numero_justificatif)}` : ''}${f.commentaire ? ` — ${ptEchapperHtml(f.commentaire)}` : ''}
+              ${f.justificatif_url ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-voir-justificatif" data-chemin="${ptEchapperHtml(f.justificatif_url)}">Voir la photo</button>` : ''}
+            </div>
           </li>`;
       }).join('') || '<li class="pt-liste-vide">Aucun frais envoyé.</li>'}
     </ul>`;
@@ -2246,21 +2252,103 @@ async function ptRenderFraisSuivi(zoneContenu, conteneur) {
     const formulaire = new FormData(evenement.target);
     const erreurEl = document.getElementById('pt-frais-erreur');
     erreurEl.hidden = true;
+    const boutonSubmit = evenement.target.querySelector('button[type="submit"]');
+    boutonSubmit.disabled = true;
     try {
+      const fichierJustificatif = formulaire.get('justificatif_photo');
+      let justificatifUrl = null;
+      if (fichierJustificatif && fichierJustificatif.size > 0) {
+        const image = await ptComposerImageJustificatif(fichierJustificatif, formulaire.get('numero_justificatif'));
+        justificatifUrl = await ptTeleverserJustificatif(image, S.session.user.id);
+      }
       await ptAjouterFrais({
         date: formulaire.get('date'),
         numero_justificatif: formulaire.get('numero_justificatif') || null,
         montant: Number(formulaire.get('montant')),
         type_frais: formulaire.get('type_frais') || null,
         commentaire: formulaire.get('commentaire') || null,
+        justificatif_url: justificatifUrl,
       });
       ptRenderFraisSuivi(zoneContenu, conteneur);
     } catch (erreur) {
       erreurEl.textContent = 'Échec de l\'envoi du frais.';
       erreurEl.hidden = false;
       PT_DEBUG.log(`Échec ajout frais : ${erreur.message}`, true);
+      boutonSubmit.disabled = false;
     }
   });
+
+  zoneContenu.querySelectorAll('.pt-btn-voir-justificatif').forEach((bouton) => {
+    bouton.addEventListener('click', async () => {
+      try {
+        await ptOuvrirJustificatif(bouton.dataset.chemin);
+      } catch (erreur) {
+        PT_DEBUG.log(`Échec d'affichage du justificatif : ${erreur.message}`, true);
+      }
+    });
+  });
+}
+
+// --- Photo de justificatif avec numéro incrusté (demande Jeremy,
+// 2026-09-21, section 68 : "faudrais pouvoir mettre une piece jointe
+// (photo du justificatif) et d'incruster en haut de l'image le numéro de
+// justificatif renseigner au dessus") — composée côté client (canvas,
+// même technique que le widget de signature) avant l'envoi, pour que le
+// numéro reste lisible sur l'image même si le fichier est ensuite
+// renommé/déplacé. Bucket de stockage privé "pointage-justificatifs"
+// (patch SQL associé) : accès uniquement via URL signée à la demande, pas
+// de lecture publique anonyme sur des justificatifs de frais.
+function ptComposerImageJustificatif(fichier, numero) {
+  return new Promise((resolve, reject) => {
+    const lecteur = new FileReader();
+    const image = new Image();
+    lecteur.onerror = () => reject(new Error('Lecture du fichier impossible.'));
+    lecteur.onload = () => { image.src = lecteur.result; };
+    image.onerror = () => reject(new Error('Image illisible.'));
+    image.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+
+      if (numero) {
+        const hauteurBandeau = Math.max(Math.round(canvas.height * 0.07), 40);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillRect(0, 0, canvas.width, hauteurBandeau);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `bold ${Math.round(hauteurBandeau * 0.55)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`N° ${numero}`, canvas.width / 2, hauteurBandeau / 2);
+      }
+
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error('Conversion de l\'image impossible.')); return; }
+        resolve(blob);
+      }, 'image/jpeg', 0.85);
+    };
+    lecteur.readAsDataURL(fichier);
+  });
+}
+
+async function ptTeleverserJustificatif(blob, technicienId) {
+  const chemin = `${technicienId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const { error } = await ptSupabase.storage.from('pointage-justificatifs').upload(chemin, blob, {
+    contentType: 'image/jpeg',
+    upsert: false,
+  });
+  if (error) throw error;
+  return chemin;
+}
+
+// Ouvre le justificatif dans un nouvel onglet via une URL signée de courte
+// durée (bucket privé) — générée à la demande plutôt que stockée, pour ne
+// jamais exposer d'URL permanente sur un document potentiellement sensible.
+async function ptOuvrirJustificatif(chemin) {
+  const { data, error } = await ptSupabase.storage.from('pointage-justificatifs').createSignedUrl(chemin, 300);
+  if (error) throw error;
+  window.open(data.signedUrl, '_blank', 'noopener');
 }
 
 async function ptAjouterFrais(champs) {
@@ -2970,6 +3058,10 @@ async function ptRenderSecretariatFrais(zoneContenu, conteneur) {
       <label>Montant (€) <input type="number" name="montant" min="0" step="0.01" required /></label>
       <label>Type de frais <input type="text" name="type_frais" maxlength="100" /></label>
       <label>Commentaire <input type="text" name="commentaire" maxlength="200" /></label>
+      <label>Photo du justificatif
+        <input type="file" name="justificatif_photo" accept="image/*" capture="environment" />
+      </label>
+      <p class="pt-info">Le numéro de justificatif ci-dessus est incrusté automatiquement en haut de la photo avant l'envoi.</p>
       <button type="submit" class="pt-btn pt-btn-petit">Ajouter</button>
       <p id="pt-frais-secretariat-erreur" class="pt-message-erreur" hidden></p>
     </form>
@@ -2984,7 +3076,9 @@ async function ptRenderSecretariatFrais(zoneContenu, conteneur) {
               ${Object.entries(PT_LABELS_STATUT_FRAIS).map(([v, l]) => `<option value="${v}" ${f.statut === v ? 'selected' : ''}>${l.label}</option>`).join('')}
             </select>
           </div>
-          <div class="pt-jour-suivi-details">${f.date}${f.numero_justificatif ? ` — Justificatif n°${ptEchapperHtml(f.numero_justificatif)}` : ''}${f.type_frais ? ` — ${ptEchapperHtml(f.type_frais)}` : ''}${f.commentaire ? ` — ${ptEchapperHtml(f.commentaire)}` : ''}</div>
+          <div class="pt-jour-suivi-details">${f.date}${f.numero_justificatif ? ` — Justificatif n°${ptEchapperHtml(f.numero_justificatif)}` : ''}${f.type_frais ? ` — ${ptEchapperHtml(f.type_frais)}` : ''}${f.commentaire ? ` — ${ptEchapperHtml(f.commentaire)}` : ''}
+            ${f.justificatif_url ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-voir-justificatif" data-chemin="${ptEchapperHtml(f.justificatif_url)}">Voir la photo</button>` : ''}
+          </div>
         </li>`).join('') || '<li class="pt-liste-vide">Aucun frais récent.</li>'}
     </ul>`;
 
@@ -2993,20 +3087,31 @@ async function ptRenderSecretariatFrais(zoneContenu, conteneur) {
     const formulaire = new FormData(evenement.target);
     const erreurEl = document.getElementById('pt-frais-secretariat-erreur');
     erreurEl.hidden = true;
+    const boutonSubmit = evenement.target.querySelector('button[type="submit"]');
+    boutonSubmit.disabled = true;
     try {
+      const technicienId = formulaire.get('technicien_id');
+      const fichierJustificatif = formulaire.get('justificatif_photo');
+      let justificatifUrl = null;
+      if (fichierJustificatif && fichierJustificatif.size > 0) {
+        const image = await ptComposerImageJustificatif(fichierJustificatif, formulaire.get('numero_justificatif'));
+        justificatifUrl = await ptTeleverserJustificatif(image, technicienId);
+      }
       await ptAjouterFraisPourTechnicien({
-        technicien_id: formulaire.get('technicien_id'),
+        technicien_id: technicienId,
         date: formulaire.get('date'),
         numero_justificatif: formulaire.get('numero_justificatif') || null,
         montant: Number(formulaire.get('montant')),
         type_frais: formulaire.get('type_frais') || null,
         commentaire: formulaire.get('commentaire') || null,
+        justificatif_url: justificatifUrl,
       });
       ptRenderSecretariatFrais(zoneContenu, conteneur);
     } catch (erreur) {
       erreurEl.textContent = 'Échec de l\'ajout du frais.';
       erreurEl.hidden = false;
       PT_DEBUG.log(`Échec ajout frais (secrétariat) : ${erreur.message}`, true);
+      boutonSubmit.disabled = false;
     }
   });
 
@@ -3016,6 +3121,16 @@ async function ptRenderSecretariatFrais(zoneContenu, conteneur) {
         await ptModifierStatutFrais(Number(select.dataset.id), select.value);
       } catch (erreur) {
         PT_DEBUG.log(`Échec modification statut frais : ${erreur.message}`, true);
+      }
+    });
+  });
+
+  zoneContenu.querySelectorAll('.pt-btn-voir-justificatif').forEach((bouton) => {
+    bouton.addEventListener('click', async () => {
+      try {
+        await ptOuvrirJustificatif(bouton.dataset.chemin);
+      } catch (erreur) {
+        PT_DEBUG.log(`Échec d'affichage du justificatif : ${erreur.message}`, true);
       }
     });
   });
