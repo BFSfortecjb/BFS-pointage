@@ -301,6 +301,15 @@ body {
   color: var(--bfs-rouge);
 }
 
+/* Balise les jours "aucun pointage" qui sont en fait des congés accordés
+   (section 66 du mémoire) — couleur neutre/bleutée, distincte du vert
+   "complet" et du rouge "incomplet" pour ne pas laisser croire à une
+   alerte sur un jour où c'est normal de ne rien avoir pointé. */
+.pt-badge-conge {
+  background: #e8eef7;
+  color: #2c5aa0;
+}
+
 .pt-suivi-onglets {
   display: flex;
   gap: 8px;

@@ -455,7 +455,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
   // après-midi ci-dessous — pas systématiquement chargés si on arrive
   // directement sur l'onglet Suivi sans passer par Pointage avant.
   await Promise.all([ptChargerHistoriqueSuivi(S.suiviNbJours), ptChargerCentres(), ptChargerFormations()]);
-  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours, S.suiviTrajets);
+  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours, S.suiviTrajets, S.suiviConges);
 
   zoneContenu.innerHTML = `
     <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
@@ -465,7 +465,9 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
           <div class="pt-jour-suivi-entete">
             <strong>${ptFormatDateCourte(j.date)}</strong>
             ${j.horodatages.length === 0
-              ? '<span class="pt-badge">aucun pointage</span>'
+              ? (j.typeConge
+                  ? `<span class="pt-badge pt-badge-conge">${ptEchapperHtml(PT_LABELS_CONGE[j.typeConge] || j.typeConge)}</span>`
+                  : '<span class="pt-badge">aucun pointage</span>')
               : j.complet
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
@@ -1181,7 +1183,7 @@ async function ptChargerHistoriqueSuivi(nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites, trajets] = await Promise.all([
+  const [horodatages, activites, trajets, conges] = await Promise.all([
     ptSupabase
       .from('horodatages')
       .select('id, date, moment, type_horodatage')
@@ -1203,22 +1205,44 @@ async function ptChargerHistoriqueSuivi(nbJours) {
       .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
+    // Congés accordés touchant la période affichée, pour baliser les jours
+    // "aucun pointage" qui sont en fait des congés (demande Jeremy,
+    // 2026-09-21, section 66 : "vu qu'il y a les demande de congé ca
+    // pourrait etre balisé").
+    ptSupabase
+      .from('conges')
+      .select('type_conge, date_debut, date_fin')
+      .eq('technicien_id', S.session.user.id)
+      .eq('statut', 'accorde')
+      .gte('date_fin', dateDebutIso),
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
   if (trajets.error) throw trajets.error;
+  if (conges.error) throw conges.error;
   S.suiviHorodatages = horodatages.data;
   S.suiviActivites = activites.data;
   S.suiviTrajets = trajets.data;
+  S.suiviConges = conges.data;
 }
 
 // Regroupe les horodatages/activités par jour et calcule le total d'heures
 // effectives (arrivée -> départ, moins la pause) quand la journée a ses
 // 4 horodatages principaux.
-function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence = []) {
+function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence = [], conges = []) {
   const heuresTrajetParJour = ptTrajetCompteHeuresActif()
     ? ptCalculerHeuresTrajetInterAgenceParJour(trajetsInterAgence)
     : {};
+
+  // Balise chaque date couverte par un congé accordé avec son type, pour
+  // distinguer "aucun pointage parce que congé" de "aucun pointage parce
+  // qu'on a oublié" dans Suivi (section 66 du mémoire).
+  const typeCongeParJour = {};
+  for (const c of conges) {
+    for (const dateIso of ptElargirPlage(c.date_debut, c.date_fin)) {
+      typeCongeParJour[dateIso] = c.type_conge;
+    }
+  }
 
   const jours = [];
   for (let i = 0; i < nbJours; i += 1) {
@@ -1238,7 +1262,14 @@ function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence 
       complet = true;
     }
 
-    jours.push({ date: dateIso, horodatages: horodatagesJour, activites: activitesJour, heures, complet });
+    jours.push({
+      date: dateIso,
+      horodatages: horodatagesJour,
+      activites: activitesJour,
+      heures,
+      complet,
+      typeConge: typeCongeParJour[dateIso] || null,
+    });
   }
   return jours;
 }
@@ -3034,12 +3065,12 @@ async function ptRenderSecretariatPointages(zoneContenu, conteneur) {
 async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) {
   // Centres et formations nécessaires pour résoudre les libellés affichés
   // par le même rendu que l'onglet Suivi (imbriqué depuis la section 57).
-  const [{ horodatages, activites, trajets }] = await Promise.all([
+  const [{ horodatages, activites, trajets, conges }] = await Promise.all([
     ptChargerHistoriquePointageTechnicien(S.secretariatTechnicienId, S.secretariatNbJours),
     ptChargerCentres(),
     ptChargerFormations(),
   ]);
-  const jours = ptRegrouperParJour(horodatages, activites, S.secretariatNbJours, trajets);
+  const jours = ptRegrouperParJour(horodatages, activites, S.secretariatNbJours, trajets, conges);
 
   zoneListe.innerHTML = `
     <p class="pt-info">Lecture seule — les ${S.secretariatNbJours} derniers jours, du plus récent au plus ancien.</p>
@@ -3049,7 +3080,9 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
           <div class="pt-jour-suivi-entete">
             <strong>${ptFormatDateCourte(j.date)}</strong>
             ${j.horodatages.length === 0
-              ? '<span class="pt-badge">aucun pointage</span>'
+              ? (j.typeConge
+                  ? `<span class="pt-badge pt-badge-conge">${ptEchapperHtml(PT_LABELS_CONGE[j.typeConge] || j.typeConge)}</span>`
+                  : '<span class="pt-badge">aucun pointage</span>')
               : j.complet
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
@@ -3084,7 +3117,7 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites, trajets] = await Promise.all([
+  const [horodatages, activites, trajets, conges] = await Promise.all([
     ptSupabase.from('horodatages').select('date, moment, type_horodatage')
       .eq('technicien_id', technicienId)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
@@ -3103,11 +3136,18 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
       .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
+    // Congés accordés, même règle de balisage que ptChargerHistoriqueSuivi
+    // (section 66 du mémoire).
+    ptSupabase.from('conges').select('type_conge, date_debut, date_fin')
+      .eq('technicien_id', technicienId)
+      .eq('statut', 'accorde')
+      .gte('date_fin', dateDebutIso),
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
   if (trajets.error) throw trajets.error;
-  return { horodatages: horodatages.data, activites: activites.data, trajets: trajets.data };
+  if (conges.error) throw conges.error;
+  return { horodatages: horodatages.data, activites: activites.data, trajets: trajets.data, conges: conges.data };
 }
 
 // --- Onglet Pointage : bouton intelligent et activités --------------------
