@@ -455,7 +455,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
   // après-midi ci-dessous — pas systématiquement chargés si on arrive
   // directement sur l'onglet Suivi sans passer par Pointage avant.
   await Promise.all([ptChargerHistoriqueSuivi(S.suiviNbJours), ptChargerCentres(), ptChargerFormations()]);
-  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours);
+  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, S.suiviNbJours, S.suiviTrajets);
 
   zoneContenu.innerHTML = `
     <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
@@ -1175,7 +1175,7 @@ async function ptChargerHistoriqueSuivi(nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites] = await Promise.all([
+  const [horodatages, activites, trajets] = await Promise.all([
     ptSupabase
       .from('horodatages')
       .select('id, date, moment, type_horodatage')
@@ -1188,17 +1188,32 @@ async function ptChargerHistoriqueSuivi(nbJours) {
       .select('id, date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', S.session.user.id)
       .gte('date', dateDebutIso),
+    // Trajets inter-agence, nécessaires à ptCalculerHeuresTrajetInterAgenceParJour
+    // quand trajet_compte_heures_* est actif (section 63 du mémoire).
+    ptSupabase
+      .from('horodatages')
+      .select('date, moment, type_horodatage')
+      .eq('technicien_id', S.session.user.id)
+      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
+      .gte('date', dateDebutIso)
+      .order('moment', { ascending: true }),
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
+  if (trajets.error) throw trajets.error;
   S.suiviHorodatages = horodatages.data;
   S.suiviActivites = activites.data;
+  S.suiviTrajets = trajets.data;
 }
 
 // Regroupe les horodatages/activités par jour et calcule le total d'heures
 // effectives (arrivée -> départ, moins la pause) quand la journée a ses
 // 4 horodatages principaux.
-function ptRegrouperParJour(horodatages, activites, nbJours) {
+function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence = []) {
+  const heuresTrajetParJour = ptTrajetCompteHeuresActif()
+    ? ptCalculerHeuresTrajetInterAgenceParJour(trajetsInterAgence)
+    : {};
+
   const jours = [];
   for (let i = 0; i < nbJours; i += 1) {
     const date = new Date();
@@ -1207,7 +1222,15 @@ function ptRegrouperParJour(horodatages, activites, nbJours) {
 
     const horodatagesJour = horodatages.filter((h) => h.date === dateIso);
     const activitesJour = activites.filter((a) => a.date === dateIso);
-    const { heures, complet } = ptCalculerHeuresJour(horodatagesJour);
+    let { heures, complet } = ptCalculerHeuresJour(horodatagesJour);
+    const heuresTrajet = heuresTrajetParJour[dateIso] || 0;
+    if (heuresTrajet > 0) {
+      // Un jour de pur trajet (pas d'arrivée/départ bureau ce jour-là,
+      // ex. route vers une autre agence sans passer par la sienne) doit
+      // quand même remonter un total d'heures, pas rester "aucun pointage".
+      heures = (heures || 0) + heuresTrajet;
+      complet = true;
+    }
 
     jours.push({ date: dateIso, horodatages: horodatagesJour, activites: activitesJour, heures, complet });
   }
@@ -1227,6 +1250,46 @@ function ptCalculerHeuresJour(horodatagesJour) {
     totalMs -= new Date(pauseFin.moment) - new Date(pauseDebut.moment);
   }
   return { heures: totalMs / 3_600_000, complet: true };
+}
+
+// --- Heures de trajet inter-agence comptées comme heures de travail
+// (demande Jeremy, 2026-09-21, section 63 : "j'ai activé le comptage des
+// heure de déplacement ca apparait pas dans le suivi") — le paramètre
+// trajet_compte_heures_* existait déjà (Administration > Paramètres,
+// patch 2026-08-02) mais n'était lu nulle part : ni Suivi, ni récap RH.
+// Périmètre retenu avec Jeremy pour cette 1re version : uniquement les
+// trajets INTER-AGENCE (déjà pointés avec heure de départ/arrivée via
+// trajet_inter_site_debut/fin), pas encore les déplacements client avec
+// nuitée (pas de champ de saisie de durée pour ceux-là — à faire plus
+// tard si besoin). Comme un trajet inter-agence n'a pas de "mode" connu
+// (conducteur/passager/véhicule perso, propre aux déplacements client),
+// le comptage s'active dès qu'AU MOINS UN des trois paramètres
+// trajet_compte_heures_* est actif.
+function ptTrajetCompteHeuresActif() {
+  return ptParametreActif('trajet_compte_heures_conducteur')
+    || ptParametreActif('trajet_compte_heures_passager')
+    || ptParametreActif('trajet_compte_heures_vehicule_perso');
+}
+
+// Reconstitue les trajets inter-agence (paires départ/arrivée consécutives,
+// même logique d'appariement que ptCalculerSejoursInterAgence) et retourne
+// un total d'heures par date (date de l'arrivée — un trajet qui franchirait
+// minuit serait entièrement compté sur le jour d'arrivée, cas non géré
+// finement, pas rencontré en pratique pour un trajet inter-agence).
+function ptCalculerHeuresTrajetInterAgenceParJour(horodatagesTrajet) {
+  const tries = [...horodatagesTrajet].sort((a, b) => new Date(a.moment) - new Date(b.moment));
+  const parJour = {};
+  let depart = null;
+  for (const h of tries) {
+    if (h.type_horodatage === 'trajet_inter_site_debut') {
+      depart = h;
+    } else if (h.type_horodatage === 'trajet_inter_site_fin' && depart) {
+      const heures = (new Date(h.moment) - new Date(depart.moment)) / 3_600_000;
+      parJour[h.date] = (parJour[h.date] || 0) + heures;
+      depart = null;
+    }
+  }
+  return parJour;
 }
 
 function ptFormatDateCourte(dateIso) {
@@ -1415,13 +1478,25 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   }
 
   // 1. Heures effectives par jour, puis regroupées par semaine (clé = lundi).
-  const joursUniques = [...new Set(horodatagesRes.data.map((h) => h.date))];
+  // Inclut les heures de trajet inter-agence quand trajet_compte_heures_*
+  // est actif (section 63 du mémoire) — même règle que ptRegrouperParJour,
+  // pour que le récap RH et l'onglet Suivi restent cohérents entre eux. Un
+  // jour de pur trajet (pas d'arrivée/départ bureau) doit aussi être
+  // comptabilisé : joursUniques est donc élargi aux dates de trajet.
+  const heuresTrajetParJourAnnee = ptTrajetCompteHeuresActif()
+    ? ptCalculerHeuresTrajetInterAgenceParJour(trajetsRes.data)
+    : {};
+  const joursUniques = [...new Set([
+    ...horodatagesRes.data.map((h) => h.date),
+    ...Object.keys(heuresTrajetParJourAnnee),
+  ])];
   const heuresParSemaine = {}; // lundi -> total heures
   for (const dateIso of joursUniques) {
     const { heures, complet } = ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso));
-    if (!complet) continue;
+    const heuresTrajet = heuresTrajetParJourAnnee[dateIso] || 0;
+    if (!complet && heuresTrajet === 0) continue;
     const lundi = ptLundiDeLaSemaine(dateIso);
-    heuresParSemaine[lundi] = (heuresParSemaine[lundi] || 0) + heures;
+    heuresParSemaine[lundi] = (heuresParSemaine[lundi] || 0) + (complet ? heures : 0) + heuresTrajet;
   }
 
   // 1bis. Jours travaillés (au moins une arrivée pointée ce jour-là) — sert
@@ -2926,12 +3001,12 @@ async function ptRenderSecretariatPointages(zoneContenu, conteneur) {
 async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) {
   // Centres et formations nécessaires pour résoudre les libellés affichés
   // par le même rendu que l'onglet Suivi (imbriqué depuis la section 57).
-  const [{ horodatages, activites }] = await Promise.all([
+  const [{ horodatages, activites, trajets }] = await Promise.all([
     ptChargerHistoriquePointageTechnicien(S.secretariatTechnicienId, S.secretariatNbJours),
     ptChargerCentres(),
     ptChargerFormations(),
   ]);
-  const jours = ptRegrouperParJour(horodatages, activites, S.secretariatNbJours);
+  const jours = ptRegrouperParJour(horodatages, activites, S.secretariatNbJours, trajets);
 
   zoneListe.innerHTML = `
     <p class="pt-info">Lecture seule — les ${S.secretariatNbJours} derniers jours, du plus récent au plus ancien.</p>
@@ -2976,7 +3051,7 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites] = await Promise.all([
+  const [horodatages, activites, trajets] = await Promise.all([
     ptSupabase.from('horodatages').select('date, moment, type_horodatage')
       .eq('technicien_id', technicienId)
       .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
@@ -2988,10 +3063,18 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
       .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', technicienId)
       .gte('date', dateDebutIso),
+    // Trajets inter-agence, même règle de comptage que ptChargerHistoriqueSuivi
+    // (section 63 du mémoire) : le secrétariat doit voir le même total.
+    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+      .eq('technicien_id', technicienId)
+      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
+      .gte('date', dateDebutIso)
+      .order('moment', { ascending: true }),
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
-  return { horodatages: horodatages.data, activites: activites.data };
+  if (trajets.error) throw trajets.error;
+  return { horodatages: horodatages.data, activites: activites.data, trajets: trajets.data };
 }
 
 // --- Onglet Pointage : bouton intelligent et activités --------------------
