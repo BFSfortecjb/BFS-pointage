@@ -1013,13 +1013,14 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
     <p class="pt-info">RTT dispo = estimation (heures 35-39h/semaine accumulées, moins RTT pris convertis à 7h/jour), calculée depuis le 1er janvier de l'année affichée — sans solde reporté des années précédentes. Jours de déplacement = nuits chez un client + nuits inter-agence détectées.</p>
     <table class="pt-table-recap">
       <thead>
-        <tr><th>Mois</th><th>Heures</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th></tr>
+        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th></tr>
       </thead>
       <tbody>
         ${recap.mois.map((m) => `
           <tr>
             <td>${m.label}</td>
             <td>${m.heures.toFixed(2).replace('.', ',')}</td>
+            <td>${m.heuresTrajet.toFixed(2).replace('.', ',')}</td>
             <td>${m.joursDeplacement}</td>
             <td>${m.rttPrisJours}</td>
             <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
@@ -1029,6 +1030,7 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
         <tr>
           <td><strong>Total</strong></td>
           <td><strong>${recap.total.heures.toFixed(2).replace('.', ',')}</strong></td>
+          <td><strong>${recap.total.heuresTrajet.toFixed(2).replace('.', ',')}</strong></td>
           <td><strong>${recap.total.joursDeplacement}</strong></td>
           <td><strong>${recap.total.rttPrisJours}</strong></td>
           <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
@@ -1128,10 +1130,11 @@ function ptExporterRecapPdf(recap, annee) {
   doc.text(`Récap annuel ${annee} — ${S.profil.prenom} ${S.profil.nom}`, 14, 16);
   doc.autoTable({
     startY: 24,
-    head: [['Mois', 'Heures', 'Jours dépl.', 'RTT pris (j)', 'RTT dispo (h)']],
+    head: [['Mois', 'Heures pointées', 'Heures trajet', 'Jours dépl.', 'RTT pris (j)', 'RTT dispo (h)']],
     body: recap.mois.map((m) => [
       m.label,
       m.heures.toFixed(2).replace('.', ','),
+      m.heuresTrajet.toFixed(2).replace('.', ','),
       String(m.joursDeplacement),
       String(m.rttPrisJours),
       m.rttDispoHeures.toFixed(2).replace('.', ','),
@@ -1139,6 +1142,7 @@ function ptExporterRecapPdf(recap, annee) {
     foot: [[
       'Total',
       recap.total.heures.toFixed(2).replace('.', ','),
+      recap.total.heuresTrajet.toFixed(2).replace('.', ','),
       String(recap.total.joursDeplacement),
       String(recap.total.rttPrisJours),
       recap.total.rttDispoHeures.toFixed(2).replace('.', ','),
@@ -1152,14 +1156,16 @@ function ptExporterRecapPdf(recap, annee) {
 function ptExporterRecapExcel(recap, annee) {
   const lignes = recap.mois.map((m) => ({
     Mois: m.label,
-    Heures: Number(m.heures.toFixed(2)),
+    'Heures pointées': Number(m.heures.toFixed(2)),
+    'Heures trajet': Number(m.heuresTrajet.toFixed(2)),
     'Jours déplacement': m.joursDeplacement,
     'RTT pris (j)': m.rttPrisJours,
     'RTT dispo (h)': Number(m.rttDispoHeures.toFixed(2)),
   }));
   lignes.push({
     Mois: 'Total',
-    Heures: Number(recap.total.heures.toFixed(2)),
+    'Heures pointées': Number(recap.total.heures.toFixed(2)),
+    'Heures trajet': Number(recap.total.heuresTrajet.toFixed(2)),
     'Jours déplacement': recap.total.joursDeplacement,
     'RTT pris (j)': recap.total.rttPrisJours,
     'RTT dispo (h)': Number(recap.total.rttDispoHeures.toFixed(2)),
@@ -1565,12 +1571,19 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
     const dernierJourMois = new Date(annee, m + 1, 0);
 
     let heuresMois = 0;
+    // Heures de trajet inter-agence du mois, à part des heures pointées
+    // (demande Jeremy, 2026-09-21, section 64 : "je vois pas les heure de
+    // déplacmeent dans le récap mensuel, sépare le des heures pointé dans
+    // le tableau") — comptent quand même dans le total RTT hebdomadaire
+    // (heuresParSemaine ci-dessus, inchangé), juste affichées à part ici.
+    let heuresTrajetMois = 0;
     const heuresParCategorieMois = {};
     let heuresVentileesMois = 0;
     for (const dateIso of joursUniques) {
       const d = new Date(`${dateIso}T00:00:00`);
       if (d >= premierJourMois && d <= dernierJourMois) {
         heuresMois += ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
+        heuresTrajetMois += heuresTrajetParJourAnnee[dateIso] || 0;
         const ventilation = ventilationParJour[dateIso];
         for (const [categorie, heures] of Object.entries(ventilation.parCategorie)) {
           heuresParCategorieMois[categorie] = (heuresParCategorieMois[categorie] || 0) + heures;
@@ -1608,6 +1621,7 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
     mois.push({
       label: PT_LABELS_MOIS[m],
       heures: heuresMois,
+      heuresTrajet: heuresTrajetMois,
       joursDeplacement: joursDeplacementMois,
       rttPrisJours: rttPrisJoursMois,
       rttDispoHeures: cumulAccumule - cumulPris,
@@ -1624,12 +1638,13 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
 
   const total = mois.reduce((acc, m) => ({
     heures: acc.heures + m.heures,
+    heuresTrajet: acc.heuresTrajet + m.heuresTrajet,
     joursDeplacement: acc.joursDeplacement + m.joursDeplacement,
     rttPrisJours: acc.rttPrisJours + m.rttPrisJours,
     rttDispoHeures: mois[mois.length - 1].rttDispoHeures,
     joursTravailles: acc.joursTravailles + m.joursTravailles,
     ticketsResto: acc.ticketsResto + m.ticketsResto,
-  }), { heures: 0, joursDeplacement: 0, rttPrisJours: 0, rttDispoHeures: 0, joursTravailles: 0, ticketsResto: 0 });
+  }), { heures: 0, heuresTrajet: 0, joursDeplacement: 0, rttPrisJours: 0, rttDispoHeures: 0, joursTravailles: 0, ticketsResto: 0 });
 
   // Total des congés par type sur l'année entière (toutes dates confondues,
   // pas seulement celles qui tombent dans un mois du récap ci-dessus).
@@ -2616,13 +2631,14 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
     <p class="pt-info">Base de préparation des bulletins de paie : heures, RTT, jours de déplacement, jours travaillés, tickets resto (règle paramétrable dans Paramètres) et congés pris par type.</p>
     <table class="pt-table-recap">
       <thead>
-        <tr><th>Mois</th><th>Heures</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th>Jours trav.</th><th>Tickets resto</th></tr>
+        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th>Jours trav.</th><th>Tickets resto</th></tr>
       </thead>
       <tbody>
         ${recap.mois.map((m) => `
           <tr>
             <td>${m.label}</td>
             <td>${m.heures.toFixed(2).replace('.', ',')}</td>
+            <td>${m.heuresTrajet.toFixed(2).replace('.', ',')}</td>
             <td>${m.joursDeplacement}</td>
             <td>${m.rttPrisJours}</td>
             <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
@@ -2634,6 +2650,7 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
         <tr>
           <td><strong>Total</strong></td>
           <td><strong>${recap.total.heures.toFixed(2).replace('.', ',')}</strong></td>
+          <td><strong>${recap.total.heuresTrajet.toFixed(2).replace('.', ',')}</strong></td>
           <td><strong>${recap.total.joursDeplacement}</strong></td>
           <td><strong>${recap.total.rttPrisJours}</strong></td>
           <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
@@ -2673,10 +2690,11 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee, plafondsApplicables = fal
   doc.text(`Récap RH ${annee} — ${nomPrenom}`, 14, 16);
   doc.autoTable({
     startY: 24,
-    head: [['Mois', 'Heures', 'Jours dépl.', 'RTT pris (j)', 'RTT dispo (h)', 'Jours trav.', 'Tickets resto']],
+    head: [['Mois', 'Heures pointées', 'Heures trajet', 'Jours dépl.', 'RTT pris (j)', 'RTT dispo (h)', 'Jours trav.', 'Tickets resto']],
     body: recap.mois.map((m) => [
       m.label,
       m.heures.toFixed(2).replace('.', ','),
+      m.heuresTrajet.toFixed(2).replace('.', ','),
       String(m.joursDeplacement),
       String(m.rttPrisJours),
       m.rttDispoHeures.toFixed(2).replace('.', ','),
@@ -2686,6 +2704,7 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee, plafondsApplicables = fal
     foot: [[
       'Total',
       recap.total.heures.toFixed(2).replace('.', ','),
+      recap.total.heuresTrajet.toFixed(2).replace('.', ','),
       String(recap.total.joursDeplacement),
       String(recap.total.rttPrisJours),
       recap.total.rttDispoHeures.toFixed(2).replace('.', ','),
@@ -2710,7 +2729,8 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee, plafondsApplicables = fal
 function ptExporterRecapRhExcel(recap, nomPrenom, annee, plafondsApplicables = false) {
   const lignesMois = recap.mois.map((m) => ({
     Mois: m.label,
-    Heures: Number(m.heures.toFixed(2)),
+    'Heures pointées': Number(m.heures.toFixed(2)),
+    'Heures trajet': Number(m.heuresTrajet.toFixed(2)),
     'Jours déplacement': m.joursDeplacement,
     'RTT pris (j)': m.rttPrisJours,
     'RTT dispo (h)': Number(m.rttDispoHeures.toFixed(2)),
@@ -2719,7 +2739,8 @@ function ptExporterRecapRhExcel(recap, nomPrenom, annee, plafondsApplicables = f
   }));
   lignesMois.push({
     Mois: 'Total',
-    Heures: Number(recap.total.heures.toFixed(2)),
+    'Heures pointées': Number(recap.total.heures.toFixed(2)),
+    'Heures trajet': Number(recap.total.heuresTrajet.toFixed(2)),
     'Jours déplacement': recap.total.joursDeplacement,
     'RTT pris (j)': recap.total.rttPrisJours,
     'RTT dispo (h)': Number(recap.total.rttDispoHeures.toFixed(2)),
