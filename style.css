@@ -219,6 +219,21 @@ body {
 
 .pt-form-manuel { margin-top: 12px; }
 
+/* Bug identique à la section 56 (.pt-form-edition-ligne) : la règle
+   ".pt-login form, .pt-form-manuel, .pt-form-activite { display: flex }"
+   ci-dessus a la même spécificité que [hidden]{display:none} de la
+   feuille du navigateur et l'emportait dans la cascade — ces formulaires
+   restaient donc visibles même avec l'attribut "hidden" posé par le JS.
+   Concerne "Saisir un horodatage manquant" (repliée par défaut depuis sa
+   création mais jamais réellement repliée à l'écran, section 67 du
+   mémoire, 2026-09-21) et "Corriger le retour" d'un trajet inter-agence
+   (#pt-form-retour-trajet), même défaut. Règles plus spécifiques pour que
+   le masquage fonctionne réellement. */
+.pt-form-manuel[hidden],
+.pt-form-activite[hidden] {
+  display: none;
+}
+
 /* Détail des tâches saisi à la clôture d'un bloc de travail (pause
    méridienne ou fin de journée). Le champ et le bouton "Ajouter" sur une
    même ligne, la liste des tâches ajoutées en dessous. */
