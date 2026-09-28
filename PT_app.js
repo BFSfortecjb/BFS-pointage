@@ -1183,12 +1183,19 @@ async function ptChargerHistoriqueSuivi(nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites, trajets, conges] = await Promise.all([
+  const [horodatages, activites, conges] = await Promise.all([
+    // Inclut les trajets inter-agence (demande Jeremy, 2026-09-28, section
+    // 69 : "je peux pas corriger un horaire sur un horaire de déplacement")
+    // — avant, ces pointages n'étaient chargés que pour le calcul des
+    // heures (section 63), jamais affichés/éditables dans la liste du
+    // jour. Réunis ici avec les pointages classiques : mêmes ✎/✕ réutilisés
+    // sans code spécifique (ptModifierHorodatage/ptSupprimerHorodatage sont
+    // déjà génériques, aucun cas particulier par type).
     ptSupabase
       .from('horodatages')
       .select('id, date, moment, type_horodatage')
       .eq('technicien_id', S.session.user.id)
-      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
+      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart', 'trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
     ptSupabase
@@ -1196,15 +1203,6 @@ async function ptChargerHistoriqueSuivi(nbJours) {
       .select('id, date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', S.session.user.id)
       .gte('date', dateDebutIso),
-    // Trajets inter-agence, nécessaires à ptCalculerHeuresTrajetInterAgenceParJour
-    // quand trajet_compte_heures_* est actif (section 63 du mémoire).
-    ptSupabase
-      .from('horodatages')
-      .select('date, moment, type_horodatage')
-      .eq('technicien_id', S.session.user.id)
-      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
-      .gte('date', dateDebutIso)
-      .order('moment', { ascending: true }),
     // Congés accordés touchant la période affichée, pour baliser les jours
     // "aucun pointage" qui sont en fait des congés (demande Jeremy,
     // 2026-09-21, section 66 : "vu qu'il y a les demande de congé ca
@@ -1218,11 +1216,12 @@ async function ptChargerHistoriqueSuivi(nbJours) {
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
-  if (trajets.error) throw trajets.error;
   if (conges.error) throw conges.error;
   S.suiviHorodatages = horodatages.data;
   S.suiviActivites = activites.data;
-  S.suiviTrajets = trajets.data;
+  // Sous-ensemble trajet, dérivé de la même liste (plus de requête séparée)
+  // — utilisé par ptCalculerHeuresTrajetInterAgenceParJour (section 63).
+  S.suiviTrajets = horodatages.data.filter((h) => h.type_horodatage === 'trajet_inter_site_debut' || h.type_horodatage === 'trajet_inter_site_fin');
   S.suiviConges = conges.data;
 }
 
@@ -3232,10 +3231,13 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
   dateDebut.setDate(dateDebut.getDate() - nbJours);
   const dateDebutIso = dateDebut.toLocaleDateString('sv-SE');
 
-  const [horodatages, activites, trajets, conges] = await Promise.all([
-    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
+  const [horodatages, activites, conges] = await Promise.all([
+    // Inclut les trajets inter-agence, mêmes types que ptChargerHistoriqueSuivi
+    // (section 69 du mémoire) — id nécessaire pour l'édition (admin ; le
+    // secrétariat reste lecture seule côté RLS, horodatages_update/delete).
+    ptSupabase.from('horodatages').select('id, date, moment, type_horodatage')
       .eq('technicien_id', technicienId)
-      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart'])
+      .in('type_horodatage', ['arrivee', 'pause_debut', 'pause_fin', 'depart', 'trajet_inter_site_debut', 'trajet_inter_site_fin'])
       .gte('date', dateDebutIso)
       .order('moment', { ascending: true }),
     // Mêmes colonnes que ptChargerHistoriqueSuivi : le secrétariat voit le
@@ -3244,13 +3246,6 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
       .select('date, type_activite, heure_debut, heure_fin, formation_code, centre_code, commentaire, details')
       .eq('technicien_id', technicienId)
       .gte('date', dateDebutIso),
-    // Trajets inter-agence, même règle de comptage que ptChargerHistoriqueSuivi
-    // (section 63 du mémoire) : le secrétariat doit voir le même total.
-    ptSupabase.from('horodatages').select('date, moment, type_horodatage')
-      .eq('technicien_id', technicienId)
-      .in('type_horodatage', ['trajet_inter_site_debut', 'trajet_inter_site_fin'])
-      .gte('date', dateDebutIso)
-      .order('moment', { ascending: true }),
     // Congés accordés, même règle de balisage que ptChargerHistoriqueSuivi
     // (section 66 du mémoire).
     ptSupabase.from('conges').select('type_conge, date_debut, date_fin')
@@ -3260,9 +3255,10 @@ async function ptChargerHistoriquePointageTechnicien(technicienId, nbJours) {
   ]);
   if (horodatages.error) throw horodatages.error;
   if (activites.error) throw activites.error;
-  if (trajets.error) throw trajets.error;
   if (conges.error) throw conges.error;
-  return { horodatages: horodatages.data, activites: activites.data, trajets: trajets.data, conges: conges.data };
+  // Sous-ensemble trajet, dérivé de la même liste (section 69 du mémoire).
+  const trajets = horodatages.data.filter((h) => h.type_horodatage === 'trajet_inter_site_debut' || h.type_horodatage === 'trajet_inter_site_fin');
+  return { horodatages: horodatages.data, activites: activites.data, trajets, conges: conges.data };
 }
 
 // --- Onglet Pointage : bouton intelligent et activités --------------------
