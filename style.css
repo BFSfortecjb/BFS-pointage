@@ -376,6 +376,53 @@ body {
   flex-wrap: wrap;
 }
 
+/* Bouton + ligne de détail jour/semaine dépliable du récap mensuel
+   (section 71) */
+.pt-btn-detail-mois {
+  background: none;
+  border: 1px solid var(--bfs-gris-clair);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--bfs-gris);
+  white-space: nowrap;
+}
+
+.pt-ligne-detail-mois td {
+  background: #fafafa;
+  padding: 10px 8px;
+}
+
+.pt-detail-mois-grille {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  text-align: left;
+}
+
+.pt-detail-mois-grille > div {
+  flex: 1 1 220px;
+  min-width: 220px;
+}
+
+.pt-table-detail-mois {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+
+.pt-table-detail-mois th, .pt-table-detail-mois td {
+  text-align: right;
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-table-detail-mois th:first-child, .pt-table-detail-mois td:first-child {
+  text-align: left;
+}
+
 .pt-table-admin {
   width: 100%;
   border-collapse: collapse;

@@ -998,6 +998,97 @@ function ptRenderVentilationCcnHtml(recap, coefficient, annee) {
     </table>`;
 }
 
+// --- Détail jour par jour / semaine par semaine d'un mois du récap
+// (demande Jeremy, 2026-09-30, section 71 : "je voudrais qu'on puisse
+// dérouler le mois pour voir le nombre d'heure par jour et par semaine du
+// mois sélectionné") — une ligne de tableau dépliable par mois, affichée à
+// la demande (repliée par défaut), réutilisée par le récap salarié et le
+// récap RH.
+function ptRenderDetailMoisHtml(m, nbColonnes) {
+  if (m.joursDetail.length === 0 && m.semainesDetail.length === 0) {
+    return `<tr class="pt-ligne-detail-mois" hidden><td colspan="${nbColonnes}"><p class="pt-info">Aucune heure ce mois-ci.</p></td></tr>`;
+  }
+  return `
+    <tr class="pt-ligne-detail-mois" hidden>
+      <td colspan="${nbColonnes}">
+        <div class="pt-detail-mois-grille">
+          <div>
+            <strong>Détail par semaine</strong>
+            <table class="pt-table-detail-mois">
+              <thead><tr><th>Semaine du</th><th>Heures</th></tr></thead>
+              <tbody>
+                ${m.semainesDetail.map((s) => `<tr><td>${ptFormatDateCourte(s.lundi)}</td><td>${s.heures.toFixed(2).replace('.', ',')}</td></tr>`).join('') || '<tr><td colspan="2">—</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <strong>Détail par jour</strong>
+            <table class="pt-table-detail-mois">
+              <thead><tr><th>Jour</th><th>Heures pointées</th><th>Heures trajet</th></tr></thead>
+              <tbody>
+                ${m.joursDetail.map((j) => `<tr><td>${ptFormatDateCourte(j.date)}</td><td>${j.heures.toFixed(2).replace('.', ',')}</td><td>${j.heuresTrajet.toFixed(2).replace('.', ',')}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </td>
+    </tr>`;
+}
+
+// Branche les boutons "Détail" d'un tableau récap : un clic déplie/replie
+// la ligne de détail juste en dessous (ligne suivante dans le tbody).
+function ptBrancherDetailMois(conteneurTable) {
+  conteneurTable.querySelectorAll('.pt-btn-detail-mois').forEach((bouton) => {
+    bouton.addEventListener('click', () => {
+      const ligneDetail = bouton.closest('tr').nextElementSibling;
+      const deplie = !ligneDetail.hidden;
+      ligneDetail.hidden = deplie;
+      bouton.textContent = deplie ? '▸ Détail' : '▾ Détail';
+    });
+  });
+}
+
+// --- Tableau "jours par mois et par catégorie" (demande Jeremy,
+// 2026-09-30 : "un tableau par mois du nombre de jours travaillé, RTT
+// prise, congé pris, arrêt maladie...") — une ligne par mois, une colonne
+// par catégorie (jours travaillés, RTT pris, puis chaque type de congé du
+// paramétrage). Réutilisé par le récap salarié et le récap RH.
+function ptRenderJoursCategoriesHtml(recap, titreAnnee) {
+  const typesConge = Object.entries(PT_LABELS_CONGE).filter(([type]) => type !== 'rtt');
+  const ligneMois = (m) => `
+    <tr>
+      <td>${m.label}</td>
+      <td>${m.joursTravailles}</td>
+      <td>${m.rttPrisJours}</td>
+      ${typesConge.map(([type]) => `<td>${(m.congesParType && m.congesParType[type]) || 0}</td>`).join('')}
+    </tr>`;
+  return `
+    <h3 class="pt-recap-mois-titre">Jours par mois et par catégorie${titreAnnee ? ` (année ${titreAnnee})` : ''}</h3>
+    <div class="pt-table-scroll">
+      <table class="pt-table-recap">
+        <thead>
+          <tr>
+            <th>Mois</th>
+            <th>Jours trav.</th>
+            <th>RTT pris (j)</th>
+            ${typesConge.map(([, label]) => `<th>${label}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${recap.mois.map(ligneMois).join('')}
+        </tbody>
+        <tfoot>
+          <tr>
+            <td><strong>Total</strong></td>
+            <td><strong>${recap.total.joursTravailles}</strong></td>
+            <td><strong>${recap.total.rttPrisJours}</strong></td>
+            ${typesConge.map(([type]) => `<td><strong>${(recap.total.congesParType && recap.total.congesParType[type]) || 0}</strong></td>`).join('')}
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
+}
+
 async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
   zoneContenu.innerHTML = `<p>Calcul en cours…</p>`;
   const recap = await ptCalculerRecapAnnee(S.suiviAnnee);
@@ -1015,7 +1106,7 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
     <p class="pt-info">RTT dispo = estimation (heures 35-39h/semaine accumulées, moins RTT pris convertis à 7h/jour), calculée depuis le 1er janvier de l'année affichée — sans solde reporté des années précédentes. Jours de déplacement = nuits chez un client + nuits inter-agence détectées.</p>
     <table class="pt-table-recap">
       <thead>
-        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th></tr>
+        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th></th></tr>
       </thead>
       <tbody>
         ${recap.mois.map((m) => `
@@ -1026,7 +1117,8 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
             <td>${m.joursDeplacement}</td>
             <td>${m.rttPrisJours}</td>
             <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
-          </tr>`).join('')}
+            <td><button type="button" class="pt-btn-detail-mois">▸ Détail</button></td>
+          </tr>${ptRenderDetailMoisHtml(m, 7)}`).join('')}
       </tbody>
       <tfoot>
         <tr>
@@ -1036,9 +1128,11 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
           <td><strong>${recap.total.joursDeplacement}</strong></td>
           <td><strong>${recap.total.rttPrisJours}</strong></td>
           <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
+          <td></td>
         </tr>
       </tfoot>
     </table>
+    ${ptRenderJoursCategoriesHtml(recap, S.suiviAnnee)}
     ${ptRenderVentilationCcnHtml(recap, S.profil.coefficient, S.suiviAnnee)}`;
 
   document.getElementById('pt-annee-prec').addEventListener('click', () => {
@@ -1051,6 +1145,35 @@ async function ptRenderRecapAnnuel(zoneContenu, conteneur) {
   });
   document.getElementById('pt-btn-recap-pdf').addEventListener('click', () => ptExporterRecapPdf(recap, S.suiviAnnee));
   document.getElementById('pt-btn-recap-excel').addEventListener('click', () => ptExporterRecapExcel(recap, S.suiviAnnee));
+  ptBrancherDetailMois(zoneContenu);
+}
+
+// --- Lignes du tableau "jours par mois et par catégorie" pour les exports
+// (PDF et Excel, récap salarié et récap RH) — même source que l'affichage.
+function ptLignesJoursCategoriesPdf(recap) {
+  const typesConge = Object.entries(PT_LABELS_CONGE).filter(([type]) => type !== 'rtt');
+  const ligne = (m) => [
+    m.label,
+    String(m.joursTravailles),
+    String(m.rttPrisJours),
+    ...typesConge.map(([type]) => String((m.congesParType && m.congesParType[type]) || 0)),
+  ];
+  return {
+    head: [['Mois', 'Jours trav.', 'RTT pris (j)', ...typesConge.map(([, label]) => label)]],
+    body: recap.mois.map(ligne),
+    foot: [ligne({ ...recap.total, label: 'Total' })],
+  };
+}
+
+function ptLignesJoursCategoriesExcel(recap) {
+  const typesConge = Object.entries(PT_LABELS_CONGE).filter(([type]) => type !== 'rtt');
+  const ligne = (m) => ({
+    Mois: m.label,
+    'Jours travaillés': m.joursTravailles,
+    'RTT pris (j)': m.rttPrisJours,
+    ...Object.fromEntries(typesConge.map(([type, label]) => [label, (m.congesParType && m.congesParType[type]) || 0])),
+  });
+  return [...recap.mois.map(ligne), ligne({ ...recap.total, label: 'Total' })];
 }
 
 // --- Lignes de la ventilation CCN pour les exports (PDF et Excel, récap
@@ -1151,6 +1274,14 @@ function ptExporterRecapPdf(recap, annee) {
     ]],
     styles: { fontSize: 9 },
   });
+  const joursCategories = ptLignesJoursCategoriesPdf(recap);
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 10,
+    head: joursCategories.head,
+    body: joursCategories.body,
+    foot: joursCategories.foot,
+    styles: { fontSize: 8 },
+  });
   ptAjouterVentilationPdf(doc, recap, ptPlafondsAfApplicables(S.profil.coefficient));
   doc.save(`recap_${annee}_${S.profil.nom}.pdf`);
 }
@@ -1174,6 +1305,7 @@ function ptExporterRecapExcel(recap, annee) {
   });
   const classeur = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignes), `Récap ${annee}`);
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesJoursCategoriesExcel(recap)), 'Jours par catégorie');
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesVentilationExcel(recap)), 'Ventilation CCN');
   XLSX.writeFile(classeur, `recap_${annee}_${S.profil.nom}.xlsx`);
 }
@@ -1621,11 +1753,22 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
     let heuresTrajetMois = 0;
     const heuresParCategorieMois = {};
     let heuresVentileesMois = 0;
+    // Détail jour par jour du mois (demande Jeremy, 2026-09-30, section 71 :
+    // "je voudrais qu'on puisse dérouler le mois pour voir le nombre
+    // d'heure par jour et par semaine") — uniquement les jours avec au
+    // moins une heure comptée (pointée ou trajet), pas les 30/31 jours du
+    // mois avec des zéros partout.
+    const joursDetailMois = [];
     for (const dateIso of joursUniques) {
       const d = new Date(`${dateIso}T00:00:00`);
       if (d >= premierJourMois && d <= dernierJourMois) {
-        heuresMois += ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
-        heuresTrajetMois += heuresTrajetParJourAnnee[dateIso] || 0;
+        const heuresJour = ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
+        const heuresTrajetJour = heuresTrajetParJourAnnee[dateIso] || 0;
+        heuresMois += heuresJour;
+        heuresTrajetMois += heuresTrajetJour;
+        if (heuresJour > 0 || heuresTrajetJour > 0) {
+          joursDetailMois.push({ date: dateIso, heures: heuresJour, heuresTrajet: heuresTrajetJour });
+        }
         const ventilation = ventilationParJour[dateIso];
         for (const [categorie, heures] of Object.entries(ventilation.parCategorie)) {
           heuresParCategorieMois[categorie] = (heuresParCategorieMois[categorie] || 0) + heures;
@@ -1633,11 +1776,19 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
         heuresVentileesMois += ventilation.heuresVentilees;
       }
     }
+    joursDetailMois.sort((a, b) => a.date.localeCompare(b.date));
+
+    // Détail semaine par semaine du mois : une semaine est rattachée au
+    // mois de son lundi, même convention que le calcul RTT juste en
+    // dessous (une semaine à cheval sur deux mois n'est comptée qu'une
+    // fois, dans le mois de son lundi — pas de double-compte).
+    const semainesDetailMois = [];
 
     let rttAccumuleMois = 0;
     for (const [lundiIso, totalSemaine] of Object.entries(heuresParSemaine)) {
       const lundi = new Date(`${lundiIso}T00:00:00`);
       if (lundi.getFullYear() === annee && lundi.getMonth() === m) {
+        semainesDetailMois.push({ lundi: lundiIso, heures: totalSemaine });
         rttAccumuleMois += Math.min(Math.max(totalSemaine - 35, 0), 4);
       }
     }
@@ -1669,6 +1820,8 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
       rttDispoHeures: cumulAccumule - cumulPris,
       joursTravailles: joursTravaillesMois,
       ticketsResto: ticketsRestoMois,
+      joursDetail: joursDetailMois,
+      semainesDetail: semainesDetailMois,
       congesParType: congesParTypeMois,
       heuresParCategorie: heuresParCategorieMois,
       // Heures pointées qu'aucune activité ne couvre (activité sans heure de
@@ -2863,7 +3016,7 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
     <p class="pt-info">Base de préparation des bulletins de paie : heures, RTT, jours de déplacement, jours travaillés, tickets resto (règle paramétrable dans Paramètres) et congés pris par type.</p>
     <table class="pt-table-recap">
       <thead>
-        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th>Jours trav.</th><th>Tickets resto</th></tr>
+        <tr><th>Mois</th><th>Heures pointées</th><th>Heures trajet</th><th>Jours dépl.</th><th>RTT pris (j)</th><th>RTT dispo (h)</th><th>Jours trav.</th><th>Tickets resto</th><th></th></tr>
       </thead>
       <tbody>
         ${recap.mois.map((m) => `
@@ -2876,7 +3029,8 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
             <td>${m.rttDispoHeures.toFixed(2).replace('.', ',')}</td>
             <td>${m.joursTravailles}</td>
             <td>${m.ticketsResto}</td>
-          </tr>`).join('')}
+            <td><button type="button" class="pt-btn-detail-mois">▸ Détail</button></td>
+          </tr>${ptRenderDetailMoisHtml(m, 9)}`).join('')}
       </tbody>
       <tfoot>
         <tr>
@@ -2888,18 +3042,12 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
           <td><strong>${recap.total.rttDispoHeures.toFixed(2).replace('.', ',')}</strong></td>
           <td><strong>${recap.total.joursTravailles}</strong></td>
           <td><strong>${recap.total.ticketsResto}</strong></td>
+          <td></td>
         </tr>
       </tfoot>
     </table>
 
-    <h3 class="pt-recap-mois-titre">Congés pris par type (année ${S.adminRhAnnee})</h3>
-    <table class="pt-table-admin">
-      <thead><tr><th>Type</th><th>Jours</th></tr></thead>
-      <tbody>
-        ${Object.entries(PT_LABELS_CONGE).map(([type, label]) => `
-          <tr><td>${label}</td><td>${recap.total.congesParType[type] || 0}</td></tr>`).join('')}
-      </tbody>
-    </table>
+    ${ptRenderJoursCategoriesHtml(recap, S.adminRhAnnee)}
     ${ptRenderVentilationCcnHtml(recap, technicien.coefficient, S.adminRhAnnee)}`;
 
   document.getElementById('pt-rh-annee-prec').addEventListener('click', () => {
@@ -2910,6 +3058,7 @@ async function ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien) 
     S.adminRhAnnee += 1;
     ptAfficherRecapRh(zoneRecap, zoneContenu, conteneur, technicien);
   });
+  ptBrancherDetailMois(zoneRecap);
   const plafondsApplicables = ptPlafondsAfApplicables(technicien.coefficient);
   document.getElementById('pt-rh-btn-pdf').addEventListener('click', () => ptExporterRecapRhPdf(recap, nomPrenom, S.adminRhAnnee, plafondsApplicables));
   document.getElementById('pt-rh-btn-excel').addEventListener('click', () => ptExporterRecapRhExcel(recap, nomPrenom, S.adminRhAnnee, plafondsApplicables));
@@ -2945,14 +3094,13 @@ function ptExporterRecapRhPdf(recap, nomPrenom, annee, plafondsApplicables = fal
     ]],
     styles: { fontSize: 8 },
   });
-  const yApresTableau = doc.lastAutoTable.finalY + 10;
-  doc.setFontSize(11);
-  doc.text('Congés pris par type :', 14, yApresTableau);
+  const joursCategories = ptLignesJoursCategoriesPdf(recap);
   doc.autoTable({
-    startY: yApresTableau + 4,
-    head: [['Type', 'Jours']],
-    body: Object.entries(PT_LABELS_CONGE).map(([type, label]) => [label, String(recap.total.congesParType[type] || 0)]),
-    styles: { fontSize: 9 },
+    startY: doc.lastAutoTable.finalY + 10,
+    head: joursCategories.head,
+    body: joursCategories.body,
+    foot: joursCategories.foot,
+    styles: { fontSize: 8 },
   });
   ptAjouterVentilationPdf(doc, recap, plafondsApplicables);
   doc.save(`recap_rh_${annee}_${nomPrenom.replace(/\s+/g, '_')}.pdf`);
@@ -2979,14 +3127,9 @@ function ptExporterRecapRhExcel(recap, nomPrenom, annee, plafondsApplicables = f
     'Jours travaillés': recap.total.joursTravailles,
     'Tickets resto': recap.total.ticketsResto,
   });
-  const lignesConges = Object.entries(PT_LABELS_CONGE).map(([type, label]) => ({
-    Type: label,
-    Jours: recap.total.congesParType[type] || 0,
-  }));
-
   const classeur = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesMois), 'Récap mensuel');
-  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignesConges), 'Congés par type');
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesJoursCategoriesExcel(recap)), 'Jours par catégorie');
   XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(ptLignesVentilationExcel(recap)), 'Ventilation CCN');
   if (plafondsApplicables) {
     const lignesRegime = ptLignesRegimeDe(recap).map(([indicateur, constate, plafond, etat]) => ({
