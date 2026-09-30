@@ -1664,6 +1664,26 @@ function ptVentilerHeuresJour(horodatagesJour, activitesJour) {
     curseur = Math.max(curseur, fin);
   }
 
+  // Plafond automatique de l'action de formation sur une journée complète
+  // (demande Jeremy, 2026-09-30, section 77 : les pointages d'AVANT le
+  // raccourci "journée de formation type" de la section 76 comptent
+  // souvent toute la journée en AF faute d'avoir été découpés à la
+  // saisie — "sur les pointages existant... compte que 7h de formation
+  // effective"). Une journée complète (matin + après-midi, donc pause
+  // méridienne pointée = deux blocs) ne compte jamais plus de 7h d'AF :
+  // le surplus est reversé en Préparation/admin, jamais l'inverse. Une
+  // demi-journée (un seul bloc) n'est PAS plafonnée — confirmé par
+  // Jeremy : "la journée c'est 7h sûr, à la demi-journée ça peut varier",
+  // un forfait fixe y serait arbitraire. Rétroactif uniquement : ne
+  // touche aucune donnée en base, seulement ce calcul de ventilation
+  // (récap salarié + RH, régime D/E).
+  const PT_PLAFOND_AF_JOURNEE_COMPLETE_HEURES = 7;
+  if (blocs.length === 2 && (parCategorie.acte_formation || 0) > PT_PLAFOND_AF_JOURNEE_COMPLETE_HEURES) {
+    const surplus = parCategorie.acte_formation - PT_PLAFOND_AF_JOURNEE_COMPLETE_HEURES;
+    parCategorie.acte_formation = PT_PLAFOND_AF_JOURNEE_COMPLETE_HEURES;
+    parCategorie.preparation_recherche = (parCategorie.preparation_recherche || 0) + surplus;
+  }
+
   const heuresVentilees = Object.values(parCategorie).reduce((somme, v) => somme + v, 0);
   return { parCategorie, heuresVentilees };
 }
