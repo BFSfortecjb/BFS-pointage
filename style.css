@@ -335,6 +335,27 @@ body {
   margin: 0;
 }
 
+/* Onglet Accueil (section 78) : cartes "à faire", une par sujet. */
+.pt-accueil-item {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--bfs-gris-clair);
+}
+
+.pt-accueil-item:last-child {
+  border-bottom: none;
+}
+
+.pt-accueil-item strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.pt-accueil-alerte {
+  border-left: 3px solid var(--bfs-rouge);
+  padding-left: 10px;
+  background: #fdecea;
+}
+
 .pt-jour-incoherent {
   border-left: 3px solid var(--bfs-rouge);
   padding-left: 8px;

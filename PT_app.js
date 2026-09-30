@@ -317,6 +317,7 @@ function ptRenderApp(conteneur) {
   });
 
   const rendus = {
+    accueil: ptRenderOngletAccueil,
     pointage: ptRenderOngletPointage,
     suivi: ptRenderOngletSuivi,
     admin: ptRenderOngletAdmin,
@@ -410,6 +411,199 @@ async function ptRenderOngletCompte(conteneur) {
 function ptRenderOngletPlaceholder(conteneur) {
   conteneur.innerHTML = `<p>Écran à venir.</p>`;
 }
+
+// --- Onglet Accueil : "à faire" personnel (technicien) ou vue d'ensemble
+// (secrétariat/admin) — demande Jeremy, 2026-09-30, section 78 : "ajoute un
+// onglet accueil avec se qui est a faire du genre envoyer le récap, valider
+// les heures du mois... il faudra y indiqué les incohérence ou oublie pour
+// simplifier les rectifications". Réutilise les fonctions de détection
+// d'incohérences de la section 75, sans dupliquer la logique.
+async function ptRenderOngletAccueil(conteneur) {
+  if (S.profil.role === 'technicien') {
+    await ptRenderAccueilTechnicien(conteneur);
+  } else {
+    await ptRenderAccueilGestion(conteneur);
+  }
+}
+
+async function ptChargerValidationMois(technicienId, annee, mois) {
+  const { data, error } = await ptSupabase
+    .from('validations_mensuelles')
+    .select('valide_le, valide_par')
+    .eq('technicien_id', technicienId)
+    .eq('annee', annee)
+    .eq('mois', mois)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function ptValiderMois(technicienId, annee, mois) {
+  const { error } = await ptSupabase.from('validations_mensuelles').insert({
+    technicien_id: technicienId,
+    annee,
+    mois,
+    valide_par: S.session.user.id,
+  });
+  if (error) throw error;
+}
+
+async function ptRenderAccueilTechnicien(conteneur) {
+  conteneur.innerHTML = `<p>Chargement…</p>`;
+  const maintenant = new Date();
+  const annee = maintenant.getFullYear();
+  const moisHumain = maintenant.getMonth() + 1;
+  const moisIso = String(moisHumain).padStart(2, '0');
+
+  const [, congesEnAttenteRes, validation] = await Promise.all([
+    ptChargerHistoriqueSuivi(14),
+    ptSupabase.from('conges').select('id, type_conge, date_debut, date_fin')
+      .eq('technicien_id', S.session.user.id)
+      .eq('statut', 'en_attente')
+      .order('date_debut', { ascending: false }),
+    ptChargerValidationMois(S.session.user.id, annee, moisHumain),
+  ]);
+  if (congesEnAttenteRes.error) throw congesEnAttenteRes.error;
+
+  const jours = ptRegrouperParJour(S.suiviHorodatages, S.suiviActivites, 14, S.suiviTrajets, S.suiviConges);
+  const joursIncoherents = jours.filter((j) => j.incoherences.length > 0);
+  const aDesDeplacementsCeMois = S.suiviTrajets.some((h) => h.date.startsWith(`${annee}-${moisIso}`));
+  const labelMois = PT_LABELS_MOIS[maintenant.getMonth()];
+
+  conteneur.innerHTML = `
+    <section class="pt-carte">
+      <h2>À faire</h2>
+
+      <div class="pt-accueil-item${joursIncoherents.length > 0 ? ' pt-accueil-alerte' : ''}">
+        <strong>${joursIncoherents.length > 0 ? `${joursIncoherents.length} jour(s) avec une incohérence` : 'Aucune incohérence détectée'}</strong>
+        ${joursIncoherents.length > 0 ? `
+          <ul class="pt-liste-suivi">
+            ${joursIncoherents.map((j) => `<li>${ptFormatDateCourte(j.date)} — ${ptEchapperHtml(j.incoherences.join(' · '))}</li>`).join('')}
+          </ul>
+          <button type="button" class="pt-btn pt-btn-petit" id="pt-accueil-btn-suivi">Corriger dans Suivi</button>`
+          : '<p class="pt-info">Sur les 14 derniers jours.</p>'}
+      </div>
+
+      ${aDesDeplacementsCeMois ? `
+        <div class="pt-accueil-item">
+          <strong>Relevé de déplacement de ${labelMois}</strong>
+          <p class="pt-info">Pense à l'exporter et le transmettre au secrétariat.</p>
+          <button type="button" class="pt-btn pt-btn-petit" id="pt-accueil-btn-deplacements">Voir mes déplacements</button>
+        </div>` : ''}
+
+      <div class="pt-accueil-item">
+        <strong>Heures de ${labelMois}</strong>
+        ${validation
+          ? `<p class="pt-info">Validées le ${new Date(validation.valide_le).toLocaleDateString('fr-FR')}.</p>`
+          : `<p class="pt-info">Vérifie ton récap avant de valider.</p>
+             <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit" id="pt-accueil-btn-recap">Voir mon récap</button>
+             <button type="button" class="pt-btn pt-btn-petit" id="pt-accueil-btn-valider">Je valide mes heures de ${labelMois}</button>`}
+      </div>
+
+      ${congesEnAttenteRes.data.length > 0 ? `
+        <div class="pt-accueil-item">
+          <strong>${congesEnAttenteRes.data.length} demande(s) de congé en attente</strong>
+          <ul class="pt-liste-suivi">
+            ${congesEnAttenteRes.data.map((c) => `<li>${ptEchapperHtml(PT_LABELS_CONGE[c.type_conge] || c.type_conge)} — du ${c.date_debut} au ${c.date_fin}</li>`).join('')}
+          </ul>
+        </div>` : ''}
+    </section>`;
+
+  document.getElementById('pt-accueil-btn-suivi')?.addEventListener('click', () => {
+    S.suiviVue = 'jour';
+    S.ongletActif = 'suivi';
+    ptRenderApp(document.getElementById('app'));
+  });
+  document.getElementById('pt-accueil-btn-deplacements')?.addEventListener('click', () => {
+    S.suiviVue = 'deplacements';
+    S.ongletActif = 'suivi';
+    ptRenderApp(document.getElementById('app'));
+  });
+  document.getElementById('pt-accueil-btn-recap')?.addEventListener('click', () => {
+    S.suiviVue = 'recap';
+    S.ongletActif = 'suivi';
+    ptRenderApp(document.getElementById('app'));
+  });
+  document.getElementById('pt-accueil-btn-valider')?.addEventListener('click', async (evenement) => {
+    evenement.target.disabled = true;
+    try {
+      await ptValiderMois(S.session.user.id, annee, moisHumain);
+      ptRenderOngletAccueil(conteneur);
+    } catch (erreur) {
+      PT_DEBUG.log(`Échec de la validation du mois : ${erreur.message}`, true);
+      evenement.target.disabled = false;
+    }
+  });
+}
+
+async function ptRenderAccueilGestion(conteneur) {
+  conteneur.innerHTML = `<p>Chargement…</p>`;
+  const maintenant = new Date();
+  const annee = maintenant.getFullYear();
+  const moisHumain = maintenant.getMonth() + 1;
+  const labelMois = PT_LABELS_MOIS[maintenant.getMonth()];
+
+  const { data: profils, error: erreurProfils } = await ptSupabase
+    .from('profils').select('id, prenom, nom').eq('role', 'technicien').eq('actif', true);
+  if (erreurProfils) throw erreurProfils;
+
+  const [congesEnAttenteRes, validationsRes] = await Promise.all([
+    ptSupabase.from('conges').select('id, type_conge, date_debut, date_fin, technicien:profils!technicien_id(nom, prenom)')
+      .eq('statut', 'en_attente').order('date_debut', { ascending: false }),
+    ptSupabase.from('validations_mensuelles').select('technicien_id').eq('annee', annee).eq('mois', moisHumain),
+  ]);
+  if (congesEnAttenteRes.error) throw congesEnAttenteRes.error;
+  if (validationsRes.error) throw validationsRes.error;
+  const idsValides = new Set(validationsRes.data.map((v) => v.technicien_id));
+
+  // Incohérences des 14 derniers jours, tous techniciens confondus — un
+  // aller-retour par salarié (même volume que l'écran Gestion > Pointages
+  // pour un seul salarié, acceptable pour l'effectif BFS).
+  const incoherencesParTechnicien = [];
+  for (const p of profils) {
+    const { horodatages, activites, trajets, conges } = await ptChargerHistoriquePointageTechnicien(p.id, 14);
+    const jours = ptRegrouperParJour(horodatages, activites, 14, trajets, conges);
+    const joursIncoherents = jours.filter((j) => j.incoherences.length > 0);
+    if (joursIncoherents.length > 0) incoherencesParTechnicien.push({ technicien: p, jours: joursIncoherents });
+  }
+
+  conteneur.innerHTML = `
+    <section class="pt-carte">
+      <h2>À faire</h2>
+
+      <div class="pt-accueil-item${incoherencesParTechnicien.length > 0 ? ' pt-accueil-alerte' : ''}">
+        <strong>Incohérences de pointage (14 derniers jours)</strong>
+        ${incoherencesParTechnicien.length > 0 ? `
+          <ul class="pt-liste-suivi">
+            ${incoherencesParTechnicien.map((e) => `<li>${ptEchapperHtml(e.technicien.prenom)} ${ptEchapperHtml(e.technicien.nom)} — ${e.jours.length} jour(s) : ${e.jours.map((j) => ptFormatDateCourte(j.date)).join(', ')}</li>`).join('')}
+          </ul>` : '<p class="pt-info">Aucune.</p>'}
+      </div>
+
+      <div class="pt-accueil-item">
+        <strong>${congesEnAttenteRes.data.length > 0 ? `${congesEnAttenteRes.data.length} demande(s) de congé en attente de validation` : 'Aucune demande de congé en attente'}</strong>
+        ${congesEnAttenteRes.data.length > 0 ? `
+          <ul class="pt-liste-suivi">
+            ${congesEnAttenteRes.data.map((c) => `<li>${ptEchapperHtml(c.technicien?.prenom || '')} ${ptEchapperHtml(c.technicien?.nom || '')} — ${ptEchapperHtml(PT_LABELS_CONGE[c.type_conge] || c.type_conge)} — du ${c.date_debut} au ${c.date_fin}</li>`).join('')}
+          </ul>
+          <button type="button" class="pt-btn pt-btn-petit" id="pt-accueil-btn-conges">Traiter les demandes</button>` : ''}
+      </div>
+
+      <div class="pt-accueil-item">
+        <strong>Validation des heures de ${labelMois}</strong>
+        <ul class="pt-liste-suivi">
+          ${profils.map((p) => `<li>${ptEchapperHtml(p.prenom)} ${ptEchapperHtml(p.nom)} — ${idsValides.has(p.id) ? '<span class="pt-badge pt-badge-ok">Validé</span>' : '<span class="pt-badge">Pas encore validé</span>'}</li>`).join('') || '<li class="pt-liste-vide">Aucun salarié actif.</li>'}
+        </ul>
+      </div>
+    </section>`;
+
+  document.getElementById('pt-accueil-btn-conges')?.addEventListener('click', () => {
+    S.secretariatVue = 'conges';
+    S.adminVue = 'conges';
+    S.ongletActif = S.profil.role === 'admin' ? 'admin' : 'secretariat';
+    ptRenderApp(document.getElementById('app'));
+  });
+}
+
 
 // --- Onglet Suivi : historique jour par jour + récap mensuel/annuel ------
 async function ptRenderOngletSuivi(conteneur) {
