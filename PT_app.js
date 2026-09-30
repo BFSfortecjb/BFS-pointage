@@ -2200,6 +2200,13 @@ function ptCalculerNuitsDansMois(voyage, borneBasseIso, borneHauteExclusiveIso) 
   return ptNombreJoursEntre(debutEffectif, finEffective);
 }
 
+// Format court jour/mois/année utilisé par le relevé de déplacement, pour
+// coller à l'ancien modèle Excel de Jeremy ("15/7/2026", sans zéro
+// initial) plutôt qu'au format ISO utilisé partout ailleurs dans l'appli.
+function ptFormatDateJjMmAaaa(dateIso) {
+  return new Date(`${dateIso}T00:00:00`).toLocaleDateString('fr-FR');
+}
+
 // Note : "Avec p-déj"/"Sans p-déj" restent les totaux du séjour complet
 // (pas de ventilation nuit par nuit conservée après regroupement en
 // séjours, cf. ptRegrouperSejoursClient) — seul le nombre de nuits est
@@ -2209,55 +2216,90 @@ function ptCalculerNuitsDansMois(voyage, borneBasseIso, borneHauteExclusiveIso) 
 // dernier jour du mois, revenu le lendemain) peut afficher "0" nuitée sur
 // le mois où il est listé (regroupé par date d'arrivée) : normal, pas un
 // bug — ses nuits sont comptées dans l'export du mois suivant.
+//
+// Un trajet inter-agence n'a pas de petit-déjeuner payé comme une nuitée
+// client (choix Jeremy, 2026-09-30) : ses nuits sont comptées entièrement
+// dans "Nuitée sans p-déj", "Nuitée avec p-déj" reste à 0 pour ces lignes.
 function ptLignesRelevDeplacementsMois(voyagesMois, annee, mois) {
   const borneBasseIso = new Date(annee, mois, 0).toLocaleDateString('sv-SE');
   const borneHauteExclusiveIso = new Date(annee, mois + 1, 0).toLocaleDateString('sv-SE');
-  return voyagesMois.map((v) => ({
-    type: v.type === 'inter_agence' ? 'Inter-agence' : 'Client',
-    du: v.dateAller,
-    au: v.dateRetour || 'en cours',
-    nuits: ptCalculerNuitsDansMois(v, borneBasseIso, borneHauteExclusiveIso),
-    avecPetitDej: v.nuiteesAvecPetitDej ?? null,
-    sansPetitDej: v.nuiteesSansPetitDej ?? null,
-    commentaire: v.commentaire || '',
-  }));
+  return voyagesMois.map((v) => {
+    const nuits = ptCalculerNuitsDansMois(v, borneBasseIso, borneHauteExclusiveIso);
+    const estInterAgence = v.type === 'inter_agence';
+    return {
+      du: v.dateAller,
+      au: v.dateRetour || 'en cours',
+      avecPetitDej: estInterAgence ? 0 : (v.nuiteesAvecPetitDej ?? 0),
+      sansPetitDej: estInterAgence ? nuits : (v.nuiteesSansPetitDej ?? 0),
+    };
+  });
 }
 
+// --- Export du relevé mensuel (PDF et Excel) — reprend la mise en page de
+// l'ancien modèle Excel utilisé manuellement par Jeremy avant cette
+// fonctionnalité (titre "Récapitulatif déplacement mensuel", bloc
+// Formateur/Mois, puis un tableau Date aller/Date retour/Nuitée avec/sans
+// p-déj + une ligne Total), demande du 2026-09-30 : "voila le modèle
+// actuel" (capture d'écran fournie).
 function ptExporterDeplacementsMoisPdf(voyagesMois, labelMois, annee, mois, nom, prenom) {
   const lignes = ptLignesRelevDeplacementsMois(voyagesMois, annee, mois);
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF();
-  doc.setFontSize(14);
-  doc.text(`Relevé de déplacement — ${labelMois} ${annee} — ${prenom} ${nom}`, 14, 16);
+  doc.setFontSize(16);
+  doc.text('Récapitulatif déplacement mensuel', 14, 16);
   doc.autoTable({
-    startY: 24,
-    head: [['Type', 'Du', 'Au', 'Nuitées', 'Avec p-déj', 'Sans p-déj', 'Commentaire']],
+    startY: 22,
+    body: [
+      ['Formateur :', `${prenom} ${nom}`.trim().toUpperCase()],
+      ['Mois :', `${labelMois} ${annee}`],
+    ],
+    theme: 'grid',
+    styles: { fontSize: 11 },
+    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
+  });
+  doc.autoTable({
+    startY: doc.lastAutoTable.finalY + 8,
+    head: [['Date aller', 'Date retour', 'Nuitée avec', 'Nuitée sans']],
     body: lignes.map((l) => [
-      l.type, l.du, l.au, String(l.nuits),
-      l.avecPetitDej ?? '—', l.sansPetitDej ?? '—', l.commentaire,
+      ptFormatDateJjMmAaaa(l.du),
+      l.au === 'en cours' ? 'en cours' : ptFormatDateJjMmAaaa(l.au),
+      String(l.avecPetitDej),
+      String(l.sansPetitDej),
     ]),
     foot: [[
-      'Total', '', '',
-      String(lignes.reduce((acc, l) => acc + l.nuits, 0)),
-      '', '', '',
+      'Total', '',
+      String(lignes.reduce((acc, l) => acc + l.avecPetitDej, 0)),
+      String(lignes.reduce((acc, l) => acc + l.sansPetitDej, 0)),
     ]],
-    styles: { fontSize: 9 },
+    theme: 'grid',
+    styles: { fontSize: 10 },
   });
   doc.save(`releve_deplacement_${annee}_${String(mois + 1).padStart(2, '0')}_${nom}.pdf`);
 }
 
 function ptExporterDeplacementsMoisExcel(voyagesMois, labelMois, annee, mois, nom, prenom) {
-  const lignes = ptLignesRelevDeplacementsMois(voyagesMois, annee, mois).map((l) => ({
-    Type: l.type,
-    Du: l.du,
-    Au: l.au,
-    Nuitées: l.nuits,
-    'Avec p-déj': l.avecPetitDej,
-    'Sans p-déj': l.sansPetitDej,
-    Commentaire: l.commentaire,
-  }));
+  const lignes = ptLignesRelevDeplacementsMois(voyagesMois, annee, mois);
+  const feuille = [
+    ['Récapitulatif déplacement mensuel'],
+    [],
+    ['Formateur :', `${prenom} ${nom}`.trim().toUpperCase()],
+    ['Mois :', `${labelMois} ${annee}`],
+    [],
+    ['Date aller', 'Date retour', 'Nuitée avec', 'Nuitée sans'],
+    ...lignes.map((l) => [
+      ptFormatDateJjMmAaaa(l.du),
+      l.au === 'en cours' ? 'en cours' : ptFormatDateJjMmAaaa(l.au),
+      l.avecPetitDej,
+      l.sansPetitDej,
+    ]),
+    [
+      'Total', '',
+      lignes.reduce((acc, l) => acc + l.avecPetitDej, 0),
+      lignes.reduce((acc, l) => acc + l.sansPetitDej, 0),
+    ],
+  ];
   const classeur = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignes), labelMois.slice(0, 31));
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.aoa_to_sheet(feuille), labelMois.slice(0, 31));
   XLSX.writeFile(classeur, `releve_deplacement_${annee}_${String(mois + 1).padStart(2, '0')}_${nom}.xlsx`);
 }
 
