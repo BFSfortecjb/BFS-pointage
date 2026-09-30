@@ -17,7 +17,7 @@ const S = {
   session: null,
   profil: null, // ligne de pointage.profils correspondant à l'utilisateur connecté
   parametres: {}, // { cle: valeur } chargé depuis pointage.parametres
-  ongletActif: 'pointage',
+  ongletActif: 'accueil',
   horodatagesJour: [],
   centres: [],
   formations: [],
@@ -40,9 +40,9 @@ const S = {
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade
 // de if/else --------------------------------------------------------------
 const PT_ONGLETS_PAR_ROLE = {
-  technicien: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }],
-  admin: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'admin', label: 'Administration' }],
-  secretariat: [{ id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'secretariat', label: 'Gestion' }],
+  technicien: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }],
+  admin: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'admin', label: 'Administration' }],
+  secretariat: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'secretariat', label: 'Gestion' }],
 };
 
 // --- Auth -------------------------------------------------------------
