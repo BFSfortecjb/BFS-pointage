@@ -1539,6 +1539,41 @@ function ptFormatDateCourte(dateIso) {
   return new Date(`${dateIso}T00:00:00`).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+// --- Suggestions d'heures pour la "journée de formation type" (demande
+// Jeremy, 2026-09-30, section 76) : les formations démarrent toujours à
+// une valeur ronde (8h, 8h30, 9h...). "si j'arrive a 8h00 ou 8h10 c'est
+// que la formation commence a 8h30" — on arrondit donc l'heure au quart
+// d'heure... non, à la demi-heure SUIVANTE, avec une minute de marge pour
+// qu'une arrivée pile sur une demi-heure (ex. 8h30) bascule sur la
+// suivante (9h00) plutôt que de suggérer un temps de préparation nul.
+function ptArrondirDemiHeureSuivante(date = new Date()) {
+  const minutesTotal = date.getHours() * 60 + date.getMinutes();
+  const minutesArrondis = Math.ceil((minutesTotal + 1) / 30) * 30;
+  const h = Math.floor(minutesArrondis / 60) % 24;
+  const m = minutesArrondis % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Symétrique, pour suggérer une heure de début de rangement en fin de
+// journée : arrondi à la demi-heure PRÉCÉDENTE (ex. 17h10 -> 17h00).
+function ptArrondirDemiHeurePrecedente(date = new Date()) {
+  const minutesTotal = date.getHours() * 60 + date.getMinutes();
+  const minutesArrondis = Math.floor(minutesTotal / 30) * 30;
+  const h = Math.floor(minutesArrondis / 60);
+  const m = minutesArrondis % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// Ajoute n heures à une heure "HH:MM", sans dépasser minuit (calé sur une
+// journée de travail classique — pas besoin de gérer le lendemain ici).
+function ptAjouterHeures(heure, n) {
+  const [h, m] = heure.split(':').map(Number);
+  const total = Math.min(h * 60 + m + n * 60, 23 * 60 + 59);
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
 // --- Ventilation des heures par catégorie CCN (AF / PR / AC) -------------
 // Les activités sont enregistrées avec une heure de début mais, depuis la
 // fusion pointage/activité (mémoire, sections 28/29), sans heure de fin. La
@@ -3692,7 +3727,16 @@ async function ptRenderOngletPointage(conteneur) {
         ? (demarrageBlocTravail
             ? `<form id="pt-form-debut-journee" class="pt-form-activite">
                  <p class="pt-info">Pointage et activité en un seul geste : indique ce sur quoi tu démarres.</p>
-                 <label>Catégorie
+                 ${prochaine.type === 'arrivee' ? `
+                 <label class="pt-case">
+                   <input type="checkbox" id="pt-debut-journee-formation-type" />
+                   Journée de formation type (préparation avant, rangement après)
+                 </label>
+                 <div id="pt-debut-journee-formation-champs" hidden>
+                   <label>Début formation <input type="time" name="heure_formation" value="${ptArrondirDemiHeureSuivante()}" /></label>
+                   <label>Fin formation, avant rangement <input type="time" name="heure_fin_formation" value="${ptAjouterHeures(ptArrondirDemiHeureSuivante(), 8)}" /></label>
+                 </div>` : ''}
+                 <label id="pt-debut-activite-categorie-champ">Catégorie
                    <select name="type_activite" id="pt-debut-activite-type">
                      ${Object.entries(PT_LABELS_ACTIVITE).map(([valeur, libelle]) => `<option value="${valeur}">${libelle}</option>`).join('')}
                    </select>
@@ -3722,7 +3766,18 @@ async function ptRenderOngletPointage(conteneur) {
                    <p id="pt-cloture-erreur" class="pt-message-erreur" hidden></p>
                    <button type="submit" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>
                  </form>`
-              : `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`)
+              : prochaine.type === 'depart'
+                ? `<form id="pt-form-depart" class="pt-form-activite">
+                     <label class="pt-case">
+                       <input type="checkbox" id="pt-depart-rangement" />
+                       Rangement / nettoyage / administratif avant de partir
+                     </label>
+                     <div id="pt-depart-rangement-champ" hidden>
+                       <label>Depuis quelle heure <input type="time" name="heure_rangement" value="${localStorage.getItem('pt_heure_fin_formation_suggestion') || ptArrondirDemiHeurePrecedente()}" /></label>
+                     </div>
+                     <button type="submit" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>
+                   </form>`
+                : `<button id="pt-btn-pointer" class="pt-btn pt-btn-grand">${ptEchapperHtml(prochaine.label)}</button>`)
         : `<p class="pt-info">Journée déjà bouclée. Utilise la saisie manuelle ci-dessous si besoin d'une correction.</p>`}
 
       <button id="pt-btn-saisie-manuelle" class="pt-btn pt-btn-secondaire pt-btn-petit">Saisir un horodatage manquant</button>
@@ -3799,11 +3854,28 @@ async function ptRenderOngletPointage(conteneur) {
     const formDebutJournee = document.getElementById('pt-form-debut-journee');
     const champTypeDebut = document.getElementById('pt-debut-activite-type');
     const champFormationDebut = document.getElementById('pt-debut-activite-formation-champ');
+    const champCategorieDebut = document.getElementById('pt-debut-activite-categorie-champ');
+    const caseJourneeType = document.getElementById('pt-debut-journee-formation-type');
+    const champsJourneeType = document.getElementById('pt-debut-journee-formation-champs');
     const majAffichageFormationDebut = () => {
-      champFormationDebut.style.display = champTypeDebut.value === 'acte_formation' ? '' : 'none';
+      champFormationDebut.style.display = champTypeDebut.value === 'acte_formation' || caseJourneeType?.checked ? '' : 'none';
     };
     majAffichageFormationDebut();
     champTypeDebut.addEventListener('change', majAffichageFormationDebut);
+
+    // "Journée de formation type" (demande Jeremy, 2026-09-30, section 76 :
+    // arrivée tôt pour préparer, formation, rangement en fin de journée
+    // avant le départ) — masque le choix de catégorie (implicitement
+    // "Préparation" à l'arrivée puis "Action de formation" à l'heure
+    // indiquée) et affiche les deux champs d'heure à la place.
+    if (caseJourneeType) {
+      const majAffichageJourneeType = () => {
+        champsJourneeType.hidden = !caseJourneeType.checked;
+        champCategorieDebut.style.display = caseJourneeType.checked ? 'none' : '';
+        majAffichageFormationDebut();
+      };
+      caseJourneeType.addEventListener('change', majAffichageJourneeType);
+    }
 
     formDebutJournee.addEventListener('submit', async (evenement) => {
       evenement.preventDefault();
@@ -3816,14 +3888,43 @@ async function ptRenderOngletPointage(conteneur) {
         // (qui doit enregistrer 'pause_fin'), provoquant une boucle
         // arrivée/début de pause sans fin.
         await ptEnregistrerHorodatage(prochaine.type);
-        await ptAjouterActivite({
-          type_activite: formulaire.get('type_activite'),
-          formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
-          centre_code: formulaire.get('centre_code') || null,
-          heure_debut: new Date().toTimeString().slice(0, 5),
-          heure_fin: null,
-          commentaire: formulaire.get('commentaire') || null,
-        });
+        if (caseJourneeType?.checked) {
+          const centreCode = formulaire.get('centre_code') || null;
+          // Préparation depuis l'arrivée réelle (pas une heure ronde) jusqu'à
+          // l'heure de début de formation indiquée.
+          await ptAjouterActivite({
+            type_activite: 'preparation_recherche',
+            formation_code: null,
+            centre_code: centreCode,
+            heure_debut: new Date().toTimeString().slice(0, 5),
+            heure_fin: null,
+            commentaire: 'Préparation (journée de formation type)',
+          });
+          await ptAjouterActivite({
+            type_activite: 'acte_formation',
+            formation_code: formulaire.get('formation_code') || null,
+            centre_code: centreCode,
+            heure_debut: formulaire.get('heure_formation'),
+            heure_fin: null,
+            commentaire: formulaire.get('commentaire') || null,
+          });
+          // Mémorise l'heure de fin de formation indiquée, juste pour
+          // pré-remplir la suggestion du champ "rangement" au moment du
+          // départ (simple confort, pas une donnée métier — si perdue, le
+          // champ retombe sur l'arrondi de l'heure actuelle).
+          if (formulaire.get('heure_fin_formation')) {
+            localStorage.setItem('pt_heure_fin_formation_suggestion', formulaire.get('heure_fin_formation'));
+          }
+        } else {
+          await ptAjouterActivite({
+            type_activite: formulaire.get('type_activite'),
+            formation_code: formulaire.get('type_activite') === 'acte_formation' ? (formulaire.get('formation_code') || null) : null,
+            centre_code: formulaire.get('centre_code') || null,
+            heure_debut: new Date().toTimeString().slice(0, 5),
+            heure_fin: null,
+            commentaire: formulaire.get('commentaire') || null,
+          });
+        }
         ptRenderOngletPointage(conteneur);
       } catch (erreur) {
         PT_DEBUG.log(`Échec du démarrage de journée : ${erreur.message}`, true);
@@ -3898,15 +3999,36 @@ async function ptRenderOngletPointage(conteneur) {
       }
     });
   } else {
-    const boutonPointer = document.getElementById('pt-btn-pointer');
-    if (boutonPointer) {
-      boutonPointer.addEventListener('click', async () => {
-        boutonPointer.disabled = true;
+    const formDepart = document.getElementById('pt-form-depart');
+    if (formDepart) {
+      // Option "rangement" en fin de journée (section 76 du mémoire) :
+      // symétrique de la "journée de formation type" à l'arrivée. Ajoute une
+      // activité Préparation/administratif juste avant de pointer le
+      // départ, pour que la ventilation CCN ne compte pas tout l'après-midi
+      // en Action de formation.
+      const caseRangement = document.getElementById('pt-depart-rangement');
+      const champRangement = document.getElementById('pt-depart-rangement-champ');
+      caseRangement.addEventListener('change', () => {
+        champRangement.hidden = !caseRangement.checked;
+      });
+
+      formDepart.addEventListener('submit', async (evenement) => {
+        evenement.preventDefault();
+        const formulaire = new FormData(evenement.target);
+        const boutonSubmit = formDepart.querySelector('button[type="submit"]');
+        boutonSubmit.disabled = true;
         try {
-          // Clôture d'un bloc d'action de formation (ou bloc sans activité
-          // rattachée) : pas de tâches à saisir, mais l'heure de fin est
-          // renseignée quand même pour que la ventilation horaire soit
-          // exacte plutôt que déduite.
+          if (caseRangement.checked && formulaire.get('heure_rangement')) {
+            await ptAjouterActivite({
+              type_activite: 'preparation_recherche',
+              formation_code: null,
+              centre_code: null,
+              heure_debut: formulaire.get('heure_rangement'),
+              heure_fin: null,
+              commentaire: 'Rangement (journée de formation type)',
+            });
+            localStorage.removeItem('pt_heure_fin_formation_suggestion');
+          }
           if (clotureBlocTravail && activiteBloc) {
             await ptCloturerBlocActivite(activiteBloc.id, activiteBloc.details || []);
           }
@@ -3914,9 +4036,30 @@ async function ptRenderOngletPointage(conteneur) {
           ptRenderOngletPointage(conteneur);
         } catch (erreur) {
           PT_DEBUG.log(`Échec de l'enregistrement du pointage : ${erreur.message}`, true);
-          boutonPointer.disabled = false;
+          boutonSubmit.disabled = false;
         }
       });
+    } else {
+      const boutonPointer = document.getElementById('pt-btn-pointer');
+      if (boutonPointer) {
+        boutonPointer.addEventListener('click', async () => {
+          boutonPointer.disabled = true;
+          try {
+            // Clôture d'un bloc d'action de formation (ou bloc sans activité
+            // rattachée) : pas de tâches à saisir, mais l'heure de fin est
+            // renseignée quand même pour que la ventilation horaire soit
+            // exacte plutôt que déduite.
+            if (clotureBlocTravail && activiteBloc) {
+              await ptCloturerBlocActivite(activiteBloc.id, activiteBloc.details || []);
+            }
+            await ptEnregistrerHorodatage(prochaine.type);
+            ptRenderOngletPointage(conteneur);
+          } catch (erreur) {
+            PT_DEBUG.log(`Échec de l'enregistrement du pointage : ${erreur.message}`, true);
+            boutonPointer.disabled = false;
+          }
+        });
+      }
     }
   }
 

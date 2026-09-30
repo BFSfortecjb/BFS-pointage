@@ -319,6 +319,22 @@ body {
 /* Incohérences de pointage signalées en rouge (section 75) : Suivi jour
    par jour (salarié + secrétariat) et détail jour par jour du récap
    mensuel. */
+/* Case à cocher "Journée de formation type" / "Rangement" (section 76) —
+   label + checkbox alignés, distinct des <label> de champ habituels qui
+   empilent leur contenu verticalement. */
+.pt-case {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+  font-weight: normal;
+}
+
+.pt-case input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
 .pt-jour-incoherent {
   border-left: 3px solid var(--bfs-rouge);
   padding-left: 8px;
