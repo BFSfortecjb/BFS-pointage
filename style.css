@@ -316,6 +316,31 @@ body {
   color: var(--bfs-rouge);
 }
 
+/* Incohérences de pointage signalées en rouge (section 75) : Suivi jour
+   par jour (salarié + secrétariat) et détail jour par jour du récap
+   mensuel. */
+.pt-jour-incoherent {
+  border-left: 3px solid var(--bfs-rouge);
+  padding-left: 8px;
+  background: #fdecea;
+}
+
+.pt-incoherences {
+  margin: 4px 0 0;
+  font-size: 0.82rem;
+  color: var(--bfs-rouge);
+  font-weight: 600;
+}
+
+.pt-ligne-jour-incoherent {
+  background: #fdecea;
+  color: var(--bfs-rouge);
+}
+
+.pt-ligne-jour-incoherent td {
+  font-weight: 600;
+}
+
 /* Balise les jours "aucun pointage" qui sont en fait des congés accordés
    (section 66 du mémoire) — couleur neutre/bleutée, distincte du vert
    "complet" et du rouge "incomplet" pour ne pas laisser croire à une

@@ -461,7 +461,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
     <p class="pt-info">Derniers ${S.suiviNbJours} jours, du plus récent au plus ancien. Vérifie qu'aucune journée n'est incomplète.</p>
     <ul class="pt-liste-suivi">
       ${jours.map((j) => `
-        <li class="pt-jour-suivi">
+        <li class="pt-jour-suivi${j.incoherences.length > 0 ? ' pt-jour-incoherent' : ''}">
           <div class="pt-jour-suivi-entete">
             <strong>${ptFormatDateCourte(j.date)}</strong>
             ${j.horodatages.length === 0
@@ -472,6 +472,7 @@ async function ptRenderSuiviJourParJour(zoneContenu, conteneur) {
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
+          ${ptRenderIncoherencesHtml(j.incoherences)}
           ${(() => {
             const { matin, apresMidi } = ptSeparerActivitesMatinApresMidi(j);
             const aArrivee = j.horodatages.some((h) => h.type_horodatage === 'arrivee');
@@ -1024,9 +1025,9 @@ function ptRenderDetailMoisHtml(m, nbColonnes) {
           <div>
             <strong>Détail par jour</strong>
             <table class="pt-table-detail-mois">
-              <thead><tr><th>Jour</th><th>Heures pointées</th><th>Heures trajet</th></tr></thead>
+              <thead><tr><th>Jour</th><th>Heures pointées</th><th>Heures trajet</th><th>Anomalie</th></tr></thead>
               <tbody>
-                ${m.joursDetail.map((j) => `<tr><td>${ptFormatDateCourte(j.date)}</td><td>${j.heures.toFixed(2).replace('.', ',')}</td><td>${j.heuresTrajet.toFixed(2).replace('.', ',')}</td></tr>`).join('') || '<tr><td colspan="3">—</td></tr>'}
+                ${m.joursDetail.map((j) => `<tr${j.incoherences && j.incoherences.length > 0 ? ' class="pt-ligne-jour-incoherent"' : ''}><td>${ptFormatDateCourte(j.date)}</td><td>${j.heures.toFixed(2).replace('.', ',')}</td><td>${j.heuresTrajet.toFixed(2).replace('.', ',')}</td><td>${j.incoherences && j.incoherences.length > 0 ? ptEchapperHtml(j.incoherences.join(' · ')) : '—'}</td></tr>`).join('') || '<tr><td colspan="4">—</td></tr>'}
               </tbody>
             </table>
           </div>
@@ -1364,6 +1365,10 @@ function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence 
   const heuresTrajetParJour = ptTrajetCompteHeuresActif()
     ? ptCalculerHeuresTrajetInterAgenceParJour(trajetsInterAgence)
     : {};
+  // Repérage des incohérences indépendant du paramètre de comptage des
+  // heures de trajet : on veut voir l'anomalie même si le comptage
+  // d'heures de trajet est désactivé.
+  const datesTrajetsOrphelins = ptDatesTrajetsOrphelins(trajetsInterAgence);
 
   // Balise chaque date couverte par un congé accordé avec son type, pour
   // distinguer "aucun pointage parce que congé" de "aucun pointage parce
@@ -1393,6 +1398,9 @@ function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence 
       complet = true;
     }
 
+    const incoherences = ptIncoherencesPointageJour(horodatagesJour, dateIso);
+    if (datesTrajetsOrphelins.has(dateIso)) incoherences.push('Trajet inter-agence : arrivée non pointée');
+
     jours.push({
       date: dateIso,
       horodatages: horodatagesJour,
@@ -1400,6 +1408,7 @@ function ptRegrouperParJour(horodatages, activites, nbJours, trajetsInterAgence 
       heures,
       complet,
       typeConge: typeCongeParJour[dateIso] || null,
+      incoherences,
     });
   }
   return jours;
@@ -1474,6 +1483,56 @@ function ptCalculerHeuresTrajetInterAgenceParJour(horodatagesTrajet) {
     }
   }
   return parJour;
+}
+
+// --- Détection d'incohérences de pointage (demande Jeremy, 2026-09-30,
+// section 75 : "fait ressortir en rouge... les jours où il semble qu'il y
+// ait des incohérences" — précisé : "départ intergence sans arrivée, pas
+// de retour [de pause], pas de pointage de départ [fin de journée]").
+// Signale, sans rien corriger ni inventer de durée (cf. section 74) :
+// arrivée jamais suivie d'un départ, début de pause jamais suivi d'un
+// retour, et départ trajet inter-agence jamais suivi d'une arrivée. Le
+// jour en cours n'est jamais signalé pour les deux premiers cas : la
+// journée peut simplement être en cours.
+function ptIncoherencesPointageJour(horodatagesJour, dateIso) {
+  const raisons = [];
+  if (dateIso === ptDateDuJour()) return raisons;
+  const trouver = (type) => horodatagesJour.find((h) => h.type_horodatage === type);
+  if (trouver('arrivee') && !trouver('depart')) raisons.push('Départ non pointé (fin de journée)');
+  if (trouver('pause_debut') && !trouver('pause_fin')) raisons.push('Retour de pause non pointé');
+  return raisons;
+}
+
+// Dates des départs trajet inter-agence restés sans arrivée correspondante
+// — même appariement chronologique que
+// ptCalculerHeuresTrajetInterAgenceParJour (un départ apparié à une
+// arrivée trop éloignée, > 12h, compte aussi comme orphelin ici), mais ici
+// on ne fait que repérer l'anomalie pour l'afficher, sans rien compter.
+function ptDatesTrajetsOrphelins(horodatagesTrajet) {
+  const tries = [...horodatagesTrajet].sort((a, b) => new Date(a.moment) - new Date(b.moment));
+  const dates = new Set();
+  let depart = null;
+  for (const h of tries) {
+    if (h.type_horodatage === 'trajet_inter_site_debut') {
+      if (depart) dates.add(depart.date);
+      depart = h;
+    } else if (h.type_horodatage === 'trajet_inter_site_fin' && depart) {
+      const heures = (new Date(h.moment) - new Date(depart.moment)) / 3_600_000;
+      if (!(heures > 0 && heures <= PT_DUREE_TRAJET_MAX_HEURES)) dates.add(depart.date);
+      depart = null;
+    }
+  }
+  if (depart) dates.add(depart.date);
+  return dates;
+}
+
+// Petit bloc rouge listant les incohérences détectées pour un jour
+// (section 75) — affiché juste sous l'en-tête de la ligne, dans Suivi
+// jour par jour (salarié et secrétariat) et dans le détail jour par jour
+// du récap mensuel.
+function ptRenderIncoherencesHtml(incoherences) {
+  if (!incoherences || incoherences.length === 0) return '';
+  return `<p class="pt-incoherences">⚠ ${incoherences.map(ptEchapperHtml).join(' · ')}</p>`;
 }
 
 function ptFormatDateCourte(dateIso) {
@@ -1670,9 +1729,14 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
   const heuresTrajetParJourAnnee = ptTrajetCompteHeuresActif()
     ? ptCalculerHeuresTrajetInterAgenceParJour(trajetsRes.data)
     : {};
+  // Repérage des incohérences (section 75), indépendant du paramètre de
+  // comptage des heures de trajet — un départ orphelin doit rester visible
+  // même quand le comptage d'heures de trajet est désactivé.
+  const datesTrajetsOrphelinsAnnee = ptDatesTrajetsOrphelins(trajetsRes.data);
   const joursUniques = [...new Set([
     ...horodatagesRes.data.map((h) => h.date),
     ...Object.keys(heuresTrajetParJourAnnee),
+    ...datesTrajetsOrphelinsAnnee,
   ])];
   const heuresParSemaine = {}; // lundi -> total heures
   for (const dateIso of joursUniques) {
@@ -1766,12 +1830,15 @@ async function ptCalculerRecapAnnee(annee, technicienId = S.session.user.id) {
     for (const dateIso of joursUniques) {
       const d = new Date(`${dateIso}T00:00:00`);
       if (d >= premierJourMois && d <= dernierJourMois) {
-        const heuresJour = ptCalculerHeuresJour(horodatagesRes.data.filter((h) => h.date === dateIso)).heures || 0;
+        const horodatagesJour = horodatagesRes.data.filter((h) => h.date === dateIso);
+        const heuresJour = ptCalculerHeuresJour(horodatagesJour).heures || 0;
         const heuresTrajetJour = heuresTrajetParJourAnnee[dateIso] || 0;
         heuresMois += heuresJour;
         heuresTrajetMois += heuresTrajetJour;
-        if (heuresJour > 0 || heuresTrajetJour > 0) {
-          joursDetailMois.push({ date: dateIso, heures: heuresJour, heuresTrajet: heuresTrajetJour });
+        const incoherencesJour = ptIncoherencesPointageJour(horodatagesJour, dateIso);
+        if (datesTrajetsOrphelinsAnnee.has(dateIso)) incoherencesJour.push('Trajet inter-agence : arrivée non pointée');
+        if (heuresJour > 0 || heuresTrajetJour > 0 || incoherencesJour.length > 0) {
+          joursDetailMois.push({ date: dateIso, heures: heuresJour, heuresTrajet: heuresTrajetJour, incoherences: incoherencesJour });
         }
         const ventilation = ventilationParJour[dateIso];
         for (const [categorie, heures] of Object.entries(ventilation.parCategorie)) {
@@ -3481,7 +3548,7 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
     <p class="pt-info">Lecture seule — les ${S.secretariatNbJours} derniers jours, du plus récent au plus ancien.</p>
     <ul class="pt-liste-suivi">
       ${jours.map((j) => `
-        <li class="pt-jour-suivi">
+        <li class="pt-jour-suivi${j.incoherences.length > 0 ? ' pt-jour-incoherent' : ''}">
           <div class="pt-jour-suivi-entete">
             <strong>${ptFormatDateCourte(j.date)}</strong>
             ${j.horodatages.length === 0
@@ -3492,6 +3559,7 @@ async function ptAfficherPointagesTechnicien(zoneListe, zoneContenu, conteneur) 
                 ? `<span class="pt-badge pt-badge-ok">${j.heures.toFixed(2).replace('.', ',')} h</span>`
                 : '<span class="pt-badge pt-badge-alerte">incomplet</span>'}
           </div>
+          ${ptRenderIncoherencesHtml(j.incoherences)}
           ${(() => {
             const { matin, apresMidi } = ptSeparerActivitesMatinApresMidi(j);
             const aArrivee = j.horodatages.some((h) => h.type_horodatage === 'arrivee');
