@@ -1451,7 +1451,11 @@ function ptTrajetCompteHeuresActif() {
 // attente) — cas réel trouvé le 2026-09-21 (section 65 du mémoire) : un
 // départ du 11/09 sans arrivée correspondante, apparié avec l'arrivée du
 // 16/09 d'un trajet totalement différent, ajoutant ~120h fantômes au
-// récap. On ignore la paire plutôt que de fausser le total.
+// récap. On ignore la paire plutôt que de fausser le total — demande
+// Jeremy, 2026-09-30 (section 73, puis reprécisée en section 74) : pas de
+// forfait automatique pour un départ oublié, un pointage manquant se
+// corrige à la source (Suivi > Jour par jour), pas en inventant une
+// durée dans le calcul.
 const PT_DUREE_TRAJET_MAX_HEURES = 12;
 
 function ptCalculerHeuresTrajetInterAgenceParJour(horodatagesTrajet) {
