@@ -363,6 +363,17 @@ body {
 .pt-recap-mois-titre {
   margin: 18px 0 6px;
   color: var(--bfs-gris);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pt-recap-mois-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .pt-table-admin {

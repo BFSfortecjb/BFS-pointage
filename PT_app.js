@@ -1854,7 +1854,13 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
       const voyagesMois = parMois[m];
       if (!voyagesMois) return '';
       return `
-        <h3 class="pt-recap-mois-titre">${label}</h3>
+        <h3 class="pt-recap-mois-titre">
+          ${label}
+          <span class="pt-recap-mois-actions">
+            <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-export-deplacements" data-mois="${m}" data-format="pdf">Exporter PDF</button>
+            <button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-btn-export-deplacements" data-mois="${m}" data-format="excel">Exporter Excel</button>
+          </span>
+        </h3>
         <div class="pt-table-scroll">
         <table class="pt-table-recap">
           <thead><tr><th>Type</th><th>Du</th><th>Au</th><th>Nuitées</th><th>Avec p-déj</th><th>Sans p-déj</th><th>Commentaire</th><th>Action</th></tr></thead>
@@ -1894,6 +1900,18 @@ async function ptRenderDeplacementsRecap(zoneContenu, conteneur) {
   };
   const recharger = () => ptRenderDeplacementsRecap(zoneContenu, conteneur);
   const voyageParCle = (cle) => tousLesVoyages.find((v) => v.cle === cle);
+
+  zoneContenu.querySelectorAll('.pt-btn-export-deplacements').forEach((bouton) => {
+    bouton.addEventListener('click', () => {
+      const m = Number(bouton.dataset.mois);
+      const voyagesMois = parMois[m] || [];
+      if (bouton.dataset.format === 'pdf') {
+        ptExporterDeplacementsMoisPdf(voyagesMois, PT_LABELS_MOIS[m], annee, m, S.profil.nom, S.profil.prenom);
+      } else {
+        ptExporterDeplacementsMoisExcel(voyagesMois, PT_LABELS_MOIS[m], annee, m, S.profil.nom, S.profil.prenom);
+      }
+    });
+  });
 
   document.getElementById('pt-annee-prec').addEventListener('click', () => {
     S.suiviAnnee -= 1;
@@ -2004,6 +2022,90 @@ function ptActionsVoyageHtml(voyage) {
   return voyage.idDepart
     ? `<button type="button" class="pt-btn pt-btn-secondaire pt-btn-petit pt-voyage-retour" data-cle="${voyage.cle}">Corriger le retour</button>`
     : '';
+}
+
+// --- Export du relevé de déplacement, mois par mois (demande Jeremy,
+// 2026-09-30, section 70 : "je dois faire mon relevé de déplacement et le
+// transmettre au secretariat, idéalement je veux que l'export soit
+// automatique") — un bouton par mois plutôt qu'un export annuel unique,
+// pour transmettre au fil de l'eau sans attendre la fin de l'année.
+//
+// Cas particulier signalé par Jeremy le jour même : une nuit à cheval sur
+// deux mois (ex. nuit du 30 septembre au 1er octobre) doit compter pour le
+// mois où elle SE TERMINE, pas celui où elle commence — une nuit est donc
+// attribuée au mois de son jour de départ (lendemain matin), pas à celui
+// de son jour d'arrivée. Concrètement : la nuit qui démarre le tout
+// dernier jour calendaire d'un mois appartient au mois suivant, tandis que
+// la nuit qui démarre le dernier jour du mois précédent appartient à CE
+// mois-ci. Ni oubliée ni comptée deux fois d'un mois à l'autre (vérifié :
+// la somme des nuits de deux mois consécutifs pour un même séjour redonne
+// bien le total du séjour complet).
+function ptCalculerNuitsDansMois(voyage, borneBasseIso, borneHauteExclusiveIso) {
+  const debutEffectif = voyage.dateAller > borneBasseIso ? voyage.dateAller : borneBasseIso;
+  const finReelle = voyage.dateRetour || ptDateDuJour();
+  const finEffective = finReelle < borneHauteExclusiveIso ? finReelle : borneHauteExclusiveIso;
+  return ptNombreJoursEntre(debutEffectif, finEffective);
+}
+
+// Note : "Avec p-déj"/"Sans p-déj" restent les totaux du séjour complet
+// (pas de ventilation nuit par nuit conservée après regroupement en
+// séjours, cf. ptRegrouperSejoursClient) — seul le nombre de nuits est
+// réellement plafonné au mois. Cas rare en pratique (uniquement un séjour
+// client à cheval sur deux mois) ; à affiner si Jeremy le signale. Un
+// séjour dont TOUTES les nuits appartiennent au mois suivant (parti le
+// dernier jour du mois, revenu le lendemain) peut afficher "0" nuitée sur
+// le mois où il est listé (regroupé par date d'arrivée) : normal, pas un
+// bug — ses nuits sont comptées dans l'export du mois suivant.
+function ptLignesRelevDeplacementsMois(voyagesMois, annee, mois) {
+  const borneBasseIso = new Date(annee, mois, 0).toLocaleDateString('sv-SE');
+  const borneHauteExclusiveIso = new Date(annee, mois + 1, 0).toLocaleDateString('sv-SE');
+  return voyagesMois.map((v) => ({
+    type: v.type === 'inter_agence' ? 'Inter-agence' : 'Client',
+    du: v.dateAller,
+    au: v.dateRetour || 'en cours',
+    nuits: ptCalculerNuitsDansMois(v, borneBasseIso, borneHauteExclusiveIso),
+    avecPetitDej: v.nuiteesAvecPetitDej ?? null,
+    sansPetitDej: v.nuiteesSansPetitDej ?? null,
+    commentaire: v.commentaire || '',
+  }));
+}
+
+function ptExporterDeplacementsMoisPdf(voyagesMois, labelMois, annee, mois, nom, prenom) {
+  const lignes = ptLignesRelevDeplacementsMois(voyagesMois, annee, mois);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  doc.setFontSize(14);
+  doc.text(`Relevé de déplacement — ${labelMois} ${annee} — ${prenom} ${nom}`, 14, 16);
+  doc.autoTable({
+    startY: 24,
+    head: [['Type', 'Du', 'Au', 'Nuitées', 'Avec p-déj', 'Sans p-déj', 'Commentaire']],
+    body: lignes.map((l) => [
+      l.type, l.du, l.au, String(l.nuits),
+      l.avecPetitDej ?? '—', l.sansPetitDej ?? '—', l.commentaire,
+    ]),
+    foot: [[
+      'Total', '', '',
+      String(lignes.reduce((acc, l) => acc + l.nuits, 0)),
+      '', '', '',
+    ]],
+    styles: { fontSize: 9 },
+  });
+  doc.save(`releve_deplacement_${annee}_${String(mois + 1).padStart(2, '0')}_${nom}.pdf`);
+}
+
+function ptExporterDeplacementsMoisExcel(voyagesMois, labelMois, annee, mois, nom, prenom) {
+  const lignes = ptLignesRelevDeplacementsMois(voyagesMois, annee, mois).map((l) => ({
+    Type: l.type,
+    Du: l.du,
+    Au: l.au,
+    Nuitées: l.nuits,
+    'Avec p-déj': l.avecPetitDej,
+    'Sans p-déj': l.sansPetitDej,
+    Commentaire: l.commentaire,
+  }));
+  const classeur = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(classeur, XLSX.utils.json_to_sheet(lignes), labelMois.slice(0, 31));
+  XLSX.writeFile(classeur, `releve_deplacement_${annee}_${String(mois + 1).padStart(2, '0')}_${nom}.xlsx`);
 }
 
 // Vendredi de la semaine d'une date donnée — proposition par défaut du
