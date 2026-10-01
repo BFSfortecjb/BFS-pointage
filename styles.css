@@ -335,6 +335,19 @@ details h4 { margin-top: 14px; font-size: 13px; color: var(--gris-doux); }
    (noir, par défaut) / recyclage (bleu) sur le QCM de positionnement. */
 .nom-recyclage, .nom-recyclage b { color: #1d5fd6; }
 .grille-noms .nom.nom-recyclage { border-color: #1d5fd6; }
+
+/* 2026-10-01 (demande de Jeremy) : "Pratique multiple" — 2 grilles d'évaluation
+   côte à côte (2 iframes indépendantes, voir HE_pratique.js). Réservé aux
+   écrans larges : en dessous de 900px on repasse à une seule colonne, une
+   iframe de pratique devenant illisible sur téléphone. */
+.pratique-multiple { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 12px; }
+.pratique-multiple iframe {
+  width: 100%; height: 82vh; min-height: 520px;
+  border: 1px solid var(--gris-bord); border-radius: 10px; background: #fff;
+}
+@media (max-width: 900px) {
+  .pratique-multiple { grid-template-columns: 1fr; }
+}
 .succes-final { text-align: center; background: var(--vert-fond); border-left: 4px solid var(--vert); }
 
 .passation { max-width: 800px; margin: 0 auto; padding: 16px; }
