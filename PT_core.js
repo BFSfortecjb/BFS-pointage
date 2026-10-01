@@ -40,9 +40,17 @@ const S = {
 // --- Onglets disponibles par rôle, dispatch par objet plutôt que cascade
 // de if/else --------------------------------------------------------------
 const PT_ONGLETS_PAR_ROLE = {
-  technicien: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }],
-  admin: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'admin', label: 'Administration' }],
-  secretariat: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'secretariat', label: 'Gestion' }],
+  technicien: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'planning', label: 'Planning' }],
+  admin: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'planning', label: 'Planning' }, { id: 'admin', label: 'Administration' }],
+  secretariat: [{ id: 'accueil', label: 'Accueil' }, { id: 'pointage', label: 'Pointage' }, { id: 'suivi', label: 'Suivi' }, { id: 'planning', label: 'Planning' }, { id: 'secretariat', label: 'Gestion' }],
+};
+
+// Onglets dont l'affichage dépend d'un paramètre (Administration > Paramètres)
+// plutôt que du seul rôle — filtrés dans ptRenderApp avant affichage de la
+// nav. 'planning' : section 79 du mémoire, désactivable tant que le
+// secrétariat ne l'utilise pas encore.
+const PT_ONGLETS_CONDITIONNELS = {
+  planning: 'planning_actif',
 };
 
 // --- Auth -------------------------------------------------------------

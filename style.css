@@ -335,6 +335,122 @@ body {
   margin: 0;
 }
 
+/* Module Planning (section 79) : grille technicien x jour (gestion) et
+   grille jour x demi-journée (vue technicien, lecture seule). Adapté du
+   CSS d'un module "chronogramme" d'une autre appli (variables --rouge/
+   --ok/--bleu/--warn renommées vers les variables BFS déjà en place). */
+.pt-table-planning {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.pt-table-planning th, .pt-table-planning td {
+  border: 1px solid var(--bfs-gris-clair);
+  padding: 6px;
+  vertical-align: top;
+  min-width: 130px;
+}
+
+.pt-table-planning th:first-child, .pt-table-planning td:first-child {
+  min-width: 110px;
+  text-align: left;
+  background: #fafafa;
+}
+
+.pt-planning-cellule {
+  position: relative;
+}
+
+.pt-planning-cellule.pt-planning-survol {
+  border-color: var(--bfs-rouge);
+  background: #fff3f3;
+}
+
+.pt-planning-cellule-conge {
+  background: #e8eef7;
+}
+
+.pt-bloc-planning {
+  background: #e8f5e9;
+  border-left: 4px solid #2e7d32;
+  border-radius: 6px;
+  padding: 5px 7px;
+  margin-bottom: 5px;
+  font-size: 0.78rem;
+  cursor: grab;
+}
+
+.pt-bloc-planning:active { cursor: grabbing; }
+.pt-bloc-planning-libelle { font-weight: 600; }
+.pt-bloc-planning-detail { color: var(--bfs-gris); font-size: 0.74rem; margin-top: 2px; }
+
+.pt-bloc-planning-formation_interne { border-left-color: #1565c0; background: #e3f0fc; }
+.pt-bloc-planning-trajet_inter_agence { border-left-color: #ef6c00; background: #fff3e0; }
+.pt-bloc-planning-absence { border-left-color: var(--bfs-rouge); background: #fdecea; }
+.pt-bloc-planning-autre { border-left-color: var(--bfs-gris); background: #f1f1f1; }
+
+.pt-bloc-planning-actions {
+  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+}
+
+.pt-bloc-planning-actions span {
+  cursor: pointer;
+  font-size: 0.76rem;
+}
+
+.pt-btn-ajout-bloc {
+  width: 100%;
+  background: none;
+  border: 1px dashed #bbb;
+  border-radius: 6px;
+  padding: 3px;
+  font-size: 0.72rem;
+  color: var(--bfs-gris);
+  cursor: pointer;
+}
+
+.pt-ligne-horaire-planning {
+  display: flex;
+  gap: 8px;
+}
+
+/* Vue technicien (lecture seule) : colonnes = jours, chaque colonne
+   empile matin/après-midi verticalement (pas de grille Salarié x Jour
+   puisqu'un seul salarié à afficher). */
+.pt-planning-grille-technicien {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.pt-planning-jour-colonne {
+  flex: 1 1 160px;
+  min-width: 160px;
+  background: #fafafa;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.pt-planning-entete-jour {
+  text-align: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+
+.pt-planning-demi-lecture { margin-bottom: 8px; }
+
+.pt-planning-demi-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--bfs-gris);
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
 /* Onglet Accueil (section 78) : cartes "à faire", une par sujet. */
 .pt-accueil-item {
   padding: 12px 0;

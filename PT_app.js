@@ -280,7 +280,14 @@ function ptRenderLogin(conteneur) {
 const PT_ECRANS_HORS_ONGLETS = new Set(['compte']);
 
 function ptRenderApp(conteneur) {
-  const onglets = PT_ONGLETS_PAR_ROLE[S.profil.role] || [];
+  // Filtre les onglets soumis à un paramètre (ex. 'planning' / 'planning_actif',
+  // section 79 du mémoire) avant même de décider l'onglet actif — sinon un
+  // onglet désactivé resterait sélectionnable s'il était déjà actif au
+  // moment de la désactivation.
+  const onglets = (PT_ONGLETS_PAR_ROLE[S.profil.role] || []).filter((o) => {
+    const cleParametre = PT_ONGLETS_CONDITIONNELS[o.id];
+    return !cleParametre || ptParametreActif(cleParametre);
+  });
   if (!PT_ECRANS_HORS_ONGLETS.has(S.ongletActif) && !onglets.find((o) => o.id === S.ongletActif)) {
     S.ongletActif = onglets[0]?.id;
   }
@@ -320,6 +327,7 @@ function ptRenderApp(conteneur) {
     accueil: ptRenderOngletAccueil,
     pointage: ptRenderOngletPointage,
     suivi: ptRenderOngletSuivi,
+    planning: ptRenderOngletPlanning,
     admin: ptRenderOngletAdmin,
     secretariat: ptRenderOngletSecretariat,
     compte: ptRenderOngletCompte,
@@ -2988,6 +2996,7 @@ const PT_LABELS_PARAMETRE = {
   ticket_resto_jour_deplacement: 'Ticket resto — jour de déplacement',
   coefficient_seuil_technicien: 'Coefficient — seuil du statut technicien / agent de maîtrise',
   coefficient_seuil_cadre: 'Coefficient — seuil du statut cadre',
+  planning_actif: 'Onglet Planning',
 };
 
 // Paramètres saisis en nombre plutôt qu'en Activé/Désactivé. Le reste de la
@@ -3309,6 +3318,12 @@ async function ptRenderAdminParametres(zoneContenu, conteneur) {
       try {
         await ptModifierParametre(champ.dataset.cle, champ.value);
         await ptChargerParametres(); // recharge S.parametres pour le reste de l'appli (ex. geoloc_active)
+        // Un onglet conditionnel (ex. Planning) doit apparaître/disparaître
+        // de la nav immédiatement, pas seulement "à la prochaine action".
+        if (Object.values(PT_ONGLETS_CONDITIONNELS).includes(champ.dataset.cle)) {
+          ptRenderApp(conteneur);
+          return;
+        }
       } catch (erreur) {
         erreurEl.textContent = 'Échec de l\'enregistrement. Réessaie.';
         erreurEl.hidden = false;

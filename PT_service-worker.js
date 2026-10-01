@@ -7,7 +7,7 @@
 // données (/auth/, /rest/).
 // =========================================================================
 
-const VERSION_CACHE = 'pointage-v50';
+const VERSION_CACHE = 'pointage-v51';
 
 const FICHIERS_APP_SHELL = [
   './',
@@ -17,6 +17,7 @@ const FICHIERS_APP_SHELL = [
   './PT_debug.js',
   './PT_core.js',
   './PT_app.js',
+  './PT_planning.js',
   './manifest.json',
 ];
 
