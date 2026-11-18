@@ -1,3 +1,4 @@
+/* BFS-VL-a594507b — © 2026 Jérémy Bizeul — Vigie-lance, pour BFS Prévention. Tous droits réservés. */
 // =========================================================================
 // Pointage BFS — PT_service-worker.js
 // =========================================================================
@@ -7,7 +8,7 @@
 // données (/auth/, /rest/).
 // =========================================================================
 
-const VERSION_CACHE = 'pointage-v51';
+const VERSION_CACHE = 'pointage-v52';
 
 const FICHIERS_APP_SHELL = [
   './',
